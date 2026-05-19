@@ -265,12 +265,12 @@ const EyeApi = (function () {
 
   async function fetchPaymentWallets() {
     const raw = await getSiteSetting('payment_wallets_json');
-    if (!raw || !String(raw).trim()) return { telda: '', instapay: '' };
+    if (!raw || !String(raw).trim()) return { telda: '', instapay: '', online: '' };
     try {
       const o = JSON.parse(raw);
-      return { telda: String(o.telda || ''), instapay: String(o.instapay || '') };
+      return { telda: String(o.telda || ''), instapay: String(o.instapay || ''), online: String(o.online || '') };
     } catch {
-      return { telda: '', instapay: '' };
+      return { telda: '', instapay: '', online: '' };
     }
   }
 
@@ -535,6 +535,23 @@ const EyeApi = (function () {
     return (data || []).map(mapOrderRow);
   }
 
+  async function adminDeleteOrder(id) {
+    await init();
+    if (!supabase) return { ok: false, error: 'Offline' };
+    const { data: session } = await supabase.auth.getSession();
+    const uid = session?.session?.user?.id;
+    if (!uid || !(await isAdminUid(uid))) return { ok: false, error: 'Not admin' };
+    
+    // First, verify if the order exists to prevent unneeded logs
+    const { data: existing, error: fetchErr } = await supabase.from('orders').select('id').eq('id', id).maybeSingle();
+    if (!existing || fetchErr) return { ok: false, error: 'Order not found' };
+
+    const { error } = await supabase.from('orders').delete().eq('id', id);
+    if (error) return { ok: false, error: error.message };
+    writeLog('DELETE', 'order', String(id), 'Admin deleted order');
+    return { ok: true };
+  }
+
   function mapOrderRow(o) {
     let items = o.items;
     if (typeof items === 'string') {
@@ -567,6 +584,7 @@ const EyeApi = (function () {
       discount: Number(o.discount || 0),
       shipping: Number(o.shipping || 0),
       coupon_code: o.coupon_code,
+      payment_proof_url: o.payment_proof_url || null,
     };
   }
 
@@ -632,7 +650,10 @@ const EyeApi = (function () {
       }
     }
     if (!uid) return { ok: false, error: 'Could not create guest session' };
-    const oid = 'EYE-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+    
+    // 5 random digits for Order ID
+    const oid = 'EYE-' + String(Math.floor(10000 + Math.random() * 90000));
+    
     const row = {
       id: oid,
       user_id: uid,
@@ -647,6 +668,7 @@ const EyeApi = (function () {
       total: orderPayload.total,
       coupon_code: orderPayload.coupon_code || null,
       items: orderPayload.items,
+      payment_proof_url: orderPayload.payment_proof_url || null,
     };
     const { error } = await supabase.from('orders').insert(row);
     if (error) return { ok: false, error };
@@ -659,6 +681,8 @@ const EyeApi = (function () {
     await Promise.allSettled(
       items.map((it) => decrementSizeStock(it.productId, it.size, it.qty || 1))
     );
+    // Write activity log (fire-and-forget)
+    writeLog('order.created', 'order', oid, `${orderPayload.payment_method} — EGP ${orderPayload.total}`).catch(() => {});
     return { ok: true, orderId: oid, userId: uid };
   }
 
@@ -918,10 +942,191 @@ const EyeApi = (function () {
     return upErr ? { ok: false, error: upErr } : { ok: true };
   }
 
+  /* ── Payment Proof Upload ─────────────────────────────── */
+  async function uploadOrderProofBlob(blob, contentType) {
+    await init();
+    if (!supabase) return { ok: false, error: 'Offline' };
+    
+    // Allow guests (uid can be null)
+    let { data: session } = await supabase.auth.getSession();
+    let uid = session?.session?.user?.id;
+    if (!uid) {
+      try {
+        const { data: anonData } = await supabase.auth.signInAnonymously();
+        uid = anonData?.user?.id || 'guest';
+      } catch {
+        uid = 'guest';
+      }
+    }
+
+    const ct = contentType || blob.type || 'image/jpeg';
+    const ext = ct.includes('png') ? 'png' : ct.includes('webp') ? 'webp' : 'jpg';
+    const path = `${uid}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    
+    const { error } = await supabase.storage.from('order-proofs').upload(path, blob, { contentType: ct, upsert: false });
+    if (error) return { ok: false, error: error.message || error };
+    
+    const { data: pub } = supabase.storage.from('order-proofs').getPublicUrl(path);
+    return { ok: true, url: pub.publicUrl, path };
+  }
+
+  /* ── Feedback Image Upload ─────────────────────────────── */
+  async function uploadFeedbackImageBlob(blob, contentType) {
+    await init();
+    if (!supabase) return { ok: false, error: 'Offline' };
+    const { data: session } = await supabase.auth.getSession();
+    const uid = session?.session?.user?.id;
+    if (!uid) return { ok: false, error: 'Not signed in' };
+    const ct = contentType || blob.type || 'image/jpeg';
+    const ext = ct.includes('png') ? 'png' : ct.includes('webp') ? 'webp' : 'jpg';
+    const path = `fb/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    const { error } = await supabase.storage.from('feedback-images').upload(path, blob, { contentType: ct, upsert: false });
+    if (error) return { ok: false, error: error.message || error };
+    const { data: pub } = supabase.storage.from('feedback-images').getPublicUrl(path);
+    return { ok: true, url: pub.publicUrl };
+  }
+
+  /* ── Feedbacks ─────────────────────────────────────────── */
+  async function fetchFeedbacks() {
+    await init();
+    if (!supabase) return [];
+    const { data, error } = await supabase
+      .from('feedbacks')
+      .select('id,author_name,rating,comment,image_url,created_at')
+      .eq('is_approved', true)
+      .eq('is_hidden', false)
+      .order('created_at', { ascending: false })
+      .limit(50);
+    if (error) return [];
+    return data || [];
+  }
+
+  async function fetchFeedbacksAdmin() {
+    await init();
+    if (!supabase) return [];
+    const uid = (await supabase.auth.getSession()).data.session?.user?.id;
+    if (!(await isAdminUid(uid))) return [];
+    const { data, error } = await supabase
+      .from('feedbacks')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) return [];
+    return data || [];
+  }
+
+  async function submitFeedback(payload) {
+    await init();
+    if (!supabase) return { ok: false, error: 'Offline' };
+    const { data: session } = await supabase.auth.getSession();
+    const uid = session?.session?.user?.id;
+    if (!uid) return { ok: false, error: 'Not signed in' };
+    const row = {
+      user_id: uid,
+      author_name: String(payload.author_name || 'Anonymous').trim(),
+      rating: Math.min(5, Math.max(1, Number(payload.rating) || 5)),
+      comment: String(payload.comment || '').trim(),
+      image_url: payload.image_url || null,
+      is_approved: false,
+      is_hidden: false,
+    };
+    const { error } = await supabase.from('feedbacks').insert(row);
+    return error ? { ok: false, error: error.message || error } : { ok: true };
+  }
+
+  async function adminSaveFeedback(row) {
+    await init();
+    if (!supabase) return { ok: false };
+    const uid = (await supabase.auth.getSession()).data.session?.user?.id;
+    if (!(await isAdminUid(uid))) return { ok: false, error: 'Forbidden' };
+    const payload = {
+      author_name: row.author_name,
+      rating: Number(row.rating) || 5,
+      comment: row.comment || '',
+      image_url: row.image_url || null,
+      is_approved: row.is_approved !== false,
+      is_hidden: row.is_hidden === true,
+      updated_at: new Date().toISOString(),
+    };
+    if (row.id) {
+      const { error } = await supabase.from('feedbacks').update(payload).eq('id', row.id);
+      return error ? { ok: false, error } : { ok: true };
+    }
+    payload.user_id = null;
+    const { error } = await supabase.from('feedbacks').insert(payload);
+    return error ? { ok: false, error } : { ok: true };
+  }
+
+  async function adminDeleteFeedback(id) {
+    await init();
+    if (!supabase) return { ok: false };
+    const uid = (await supabase.auth.getSession()).data.session?.user?.id;
+    if (!(await isAdminUid(uid))) return { ok: false };
+    const { error } = await supabase.from('feedbacks').delete().eq('id', id);
+    return error ? { ok: false, error } : { ok: true };
+  }
+
+  async function adminToggleFeedbackApproval(id, approved) {
+    await init();
+    if (!supabase) return { ok: false };
+    const uid = (await supabase.auth.getSession()).data.session?.user?.id;
+    if (!(await isAdminUid(uid))) return { ok: false };
+    const { error } = await supabase.from('feedbacks').update({
+      is_approved: !!approved,
+      updated_at: new Date().toISOString(),
+    }).eq('id', id);
+    return error ? { ok: false, error } : { ok: true };
+  }
+
+  async function adminToggleFeedbackHidden(id, hidden) {
+    await init();
+    if (!supabase) return { ok: false };
+    const uid = (await supabase.auth.getSession()).data.session?.user?.id;
+    if (!(await isAdminUid(uid))) return { ok: false };
+    const { error } = await supabase.from('feedbacks').update({
+      is_hidden: !!hidden,
+      updated_at: new Date().toISOString(),
+    }).eq('id', id);
+    return error ? { ok: false, error } : { ok: true };
+  }
+
+  /* ── Activity Logs ─────────────────────────────────────── */
+  async function writeLog(action, entity, entityId, detail) {
+    await init();
+    if (!supabase) return;
+    try {
+      const { data: session } = await supabase.auth.getSession();
+      const uid = session?.session?.user?.id || null;
+      await supabase.from('activity_logs').insert({
+        actor_id: uid,
+        action: String(action),
+        entity: entity || null,
+        entity_id: entityId ? String(entityId) : null,
+        detail: detail || null,
+      });
+    } catch (_) {}
+  }
+
+  async function fetchLogs(limit = 200, filter = '') {
+    await init();
+    if (!supabase) return [];
+    const uid = (await supabase.auth.getSession()).data.session?.user?.id;
+    if (!(await isAdminUid(uid))) return [];
+    let q = supabase.from('activity_logs').select('*, profiles(full_name)').order('created_at', { ascending: false }).limit(limit);
+    if (filter && filter !== 'all') q = q.ilike('action', `${filter}%`);
+    const { data, error } = await q;
+    if (error) return [];
+    return data || [];
+  }
+
   /* ── Behavioral Analytics ─────────────────────────────── */
   async function saveAnalyticsEvent(event) {
     await init();
     if (!supabase) return { ok: false };
+    
+    const { data: session } = await supabase.auth.getSession();
+    const uid = session?.session?.user?.id;
+    if (uid && (await isAdminUid(uid))) return { ok: true }; // Skip admin
+
     const row = {
       event_type:   String(event.event_type || 'page_view'),
       product_id:   event.product_id  || null,
@@ -977,6 +1182,26 @@ const EyeApi = (function () {
     return { liveVisitors, todayVisitors, productStats };
   }
 
+  async function adminClearTodayAnalytics() {
+    await init();
+    if (!supabase) return { ok: false, error: 'Offline' };
+    const { data: session } = await supabase.auth.getSession();
+    const uid = session?.session?.user?.id;
+    if (!uid || !(await isAdminUid(uid))) return { ok: false, error: 'Not admin' };
+
+    const todayStart = new Date(); 
+    todayStart.setHours(0, 0, 0, 0);
+
+    const { error } = await supabase
+      .from('analytics_events')
+      .delete()
+      .gte('created_at', todayStart.toISOString());
+      
+    if (error) return { ok: false, error: error.message };
+    writeLog('DELETE', 'analytics', 'today', 'Admin cleared today analytics');
+    return { ok: true };
+  }
+
   return {
     init,
     hasRemote,
@@ -1008,6 +1233,7 @@ const EyeApi = (function () {
     fetchShippingZonesConfig,
     uploadProductImageBlob,
     uploadSiteImageBlob,
+    uploadOrderProofBlob,
     newsletterSubscribe,
     fetchWishlistProductIds,
     wishlistAdd,
@@ -1039,5 +1265,18 @@ const EyeApi = (function () {
     decrementSizeStock,
     saveAnalyticsEvent,
     fetchAnalyticsData,
+    uploadOrderProofBlob,
+    uploadFeedbackImageBlob,
+    fetchFeedbacks,
+    fetchFeedbacksAdmin,
+    submitFeedback,
+    adminSaveFeedback,
+    adminDeleteFeedback,
+    adminToggleFeedbackApproval,
+    adminToggleFeedbackHidden,
+    writeLog,
+    fetchLogs,
+    adminDeleteOrder,
+    adminClearTodayAnalytics,
   };
 })();

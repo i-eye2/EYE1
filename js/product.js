@@ -108,11 +108,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     return;
   }
 
-  const [productOne, hp, zonesCfg, shipFree] = await Promise.all([
+  const [productOne, hp, zonesCfg, shipFree, allProducts] = await Promise.all([
     EyeApi.fetchProductBySlugOrId({ slug: slugQ, id: idQ }),
     EyeApi.fetchHomepageJson(),
     EyeApi.fetchShippingZonesConfig(),
     EyeApi.fetchShippingFreeThresholdEgp(),
+    EyeApi.fetchProducts()
   ]);
   __pdZonesCfg = zonesCfg || { zones: [], defaultShippingEgp: 150 };
   __pdShipFree = shipFree;
@@ -194,7 +195,40 @@ document.addEventListener('DOMContentLoaded', async () => {
         </div>
         <a href="shop.html" class="pd-back">${escapeHtml(pu.backToShopLabel || '')}</a>
       </div>
+    </div>
+    <div class="pd-suggestions">
+      <h2 class="pd-suggestions-title">You may also like</h2>
+      <div class="pd-suggestions-grid" id="pdSuggestionsGrid"></div>
     </div>`;
+
+  const sugGrid = document.getElementById('pdSuggestionsGrid');
+  if (sugGrid && allProducts) {
+    const suggestions = allProducts
+      .filter(p => p.id !== __pdProduct.id && p.categoryId === __pdProduct.categoryId)
+      .slice(0, 8);
+    
+    if (suggestions.length === 0) {
+      document.querySelector('.pd-suggestions').style.display = 'none';
+    } else {
+      sugGrid.innerHTML = suggestions.map(p => {
+        const href = productPublicHref(p);
+        const out = !productHasBuyableStock(p);
+        const priceHtml = p.comparePrice
+          ? `<span class="product-price-old">${formatPrice(p.comparePrice)}</span><span class="product-price-new">${formatPrice(p.price)}</span>`
+          : formatPrice(p.price);
+        return `
+          <div class="product-card" onclick="location.href='${escapeHtml(href)}'">
+            <div class="product-img-wrap">
+              <img src="${escapeHtml(p.image)}" alt="${escapeHtml(p.name)}" loading="lazy" />
+            </div>
+            <div class="product-info">
+              <div class="product-name">${escapeHtml(p.name)}</div>
+              <div class="product-price">${priceHtml}</div>
+            </div>
+          </div>`;
+      }).join('');
+    }
+  }
 
   const sizesEl = document.getElementById('pdSizes');
   sizes.forEach((s) => {

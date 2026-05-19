@@ -278,3 +278,50 @@ body.has-marquee .product-page { padding-top: calc(var(--nav-h) + 36px + 48px); 
   .product-page { padding: calc(var(--nav-h) + 32px) 20px 60px; }
   .pd-ship-row { grid-template-columns: 1fr; gap: 6px; }
 }
+
+/* ── SUGGESTIONS ── */
+.pd-suggestions {
+  margin-top: 120px;
+  border-top: 1px solid var(--gray-200);
+  padding-top: 80px;
+}
+.pd-suggestions-title {
+  font-family: var(--font-serif);
+  font-size: 32px;
+  font-weight: 300;
+  margin-bottom: 48px;
+  text-align: center;
+  letter-spacing: -0.01em;
+}
+.pd-suggestions-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 32px;
+}
+
+@media (max-width: 1024px) {
+  .pd-suggestions-grid { grid-template-columns: repeat(3, 1fr); gap: 24px; }
+}
+
+@media (max-width: 768px) {
+  .pd-suggestions { margin-top: 80px; padding-top: 56px; }
+  .pd-suggestions-title { font-size: 24px; margin-bottom: 32px; }
+  .pd-suggestions-grid {
+    display: flex;
+    overflow-x: auto;
+    gap: 12px;
+    margin: 0 -16px;
+    padding: 0 16px 20px;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    will-change: transform;
+    touch-action: pan-x;
+  }
+  .pd-suggestions-grid::-webkit-scrollbar { display: none; }
+  .pd-suggestions-grid .product-card {
+    flex: 0 0 140px;
+    width: 140px;
+  }
+  .pd-suggestions-grid .product-name { font-size: 13px; }
+  .pd-suggestions-grid .product-price { font-size: 11px; }
+}

@@ -138,8 +138,26 @@ body { background: #0a0a0a; }
   background: rgba(201, 168, 76, 0.06);
 }
 .admin-nav-item svg { flex-shrink: 0; stroke: currentColor; }
+.admin-nav-section-label {
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--gold);
+  padding: 20px 32px 8px;
+  opacity: .7;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.admin-nav-section-label:hover { opacity: 1; }
+.admin-nav-section { overflow: hidden; transition: max-height 0.3s ease; }
+.admin-nav-section.collapsed { max-height: 0; display: none; }
+.nav-arrow { font-size: 8px; transition: transform 0.2s; }
+.admin-nav-section.collapsed + .admin-nav-section-label .nav-arrow { transform: rotate(-90deg); }
 .admin-sidebar-footer { padding: 24px 32px; border-top: 1px solid var(--gray-200); }
-.admin-main { margin-left: 260px; padding: 40px 48px; min-height: 100vh; }
+.admin-main { margin-left: 260px; padding: 40px 48px; min-height: 100vh; flex: 1; width: 100%; }
 .admin-topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 40px; }
 .admin-page-title {
   font-family: var(--font-serif);
@@ -175,8 +193,8 @@ body { background: #0a0a0a; }
   border-bottom: 1px solid var(--gray-200);
 }
 .admin-card-title {
-  font-size: 12px;
-  letter-spacing: 0.2em;
+  font-size: 13px;
+  letter-spacing: 0.15em;
   text-transform: uppercase;
   font-weight: 500;
   color: var(--white);
@@ -205,6 +223,19 @@ body { background: #0a0a0a; }
 .admin-wrap tr:last-child td { border-bottom: none; }
 .admin-wrap tr:hover td { background: rgba(255, 255, 255, 0.02); }
 .product-thumb { width: 48px; height: 60px; object-fit: cover; background: var(--gray-200); }
+
+/* Payment proof thumbnail in orders table */
+.order-proof-cell { width: 72px; }
+.order-proof-thumb {
+  width: 60px;
+  height: 75px;
+  object-fit: cover;
+  cursor: zoom-in;
+  border: 1px solid var(--gray-200);
+  transition: all .2s;
+  display: block;
+}
+.order-proof-thumb:hover { border-color: var(--gold); transform: scale(1.05); }
 
 .badge {
   font-size: 10px;
@@ -584,13 +615,13 @@ body { background: #0a0a0a; }
 .pay-method-telda { background: rgba(80, 120, 200, 0.2); color: #8ab4ff; }
 .pay-method-insta { background: rgba(200, 120, 80, 0.2); color: #e0a080; }
 .pay-method-cod { background: rgba(120, 120, 120, 0.25); color: var(--gray-600); }
+.pay-method-online { background: rgba(120, 80, 200, 0.2); color: #b48aff; }
 .pay-method-other { background: var(--gray-200); color: var(--gray-600); }
 
 @media (max-width: 1024px) {
   .admin-sidebar { width: 220px; }
   .admin-main { margin-left: 220px; padding: 24px; }
   .stat-cards { grid-template-columns: repeat(2, 1fr); }
-}
 }
 @media (max-width: 768px) {
   .admin-sidebar { display: none; }

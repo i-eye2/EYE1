@@ -50,6 +50,7 @@ async function submitLogin(e) {
     err.textContent = error.message || 'Sign in failed';
     return;
   }
+  await EyeApi.writeLog('LOGIN', 'profile', email, `User signed in successfully`);
   await Wishlist.refresh();
   await routeAfterAuth();
 }

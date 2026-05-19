@@ -318,6 +318,11 @@ function refreshCheckoutPaymentHint() {
     txt.textContent = __checkoutWallets.instapay;
     return;
   }
+  if (pay === 'Online Wallet' && __checkoutWallets.online) {
+    box.style.display = 'block';
+    txt.textContent = __checkoutWallets.online;
+    return;
+  }
   box.style.display = 'none';
   txt.textContent = '';
 }
@@ -470,18 +475,27 @@ async function openCheckoutModal() {
             <option value="">— Select payment method —</option>
             <option value="InstaPay">💸 InstaPay</option>
             <option value="Telda">💳 Telda</option>
+            <option value="Online Wallet">📱 Online Wallet</option>
             <option value="Cash on Delivery">📦 Cash on Delivery (COD)</option>
           </select>
         </div>
         <div id="chkWalletBox" class="checkout-wallet-box" style="display:none">
           <div class="checkout-wallet-label">Send payment to</div>
           <div id="chkWalletText" class="checkout-wallet-num"></div>
+          <div id="chkProofBox" class="checkout-proof-box" style="display:none">
+            <div class="checkout-proof-label">Upload Payment Screenshot *</div>
+            <label class="checkout-proof-upload">
+              <input type="file" id="chkProofFile" accept="image/*" style="display:none" />
+              <span class="checkout-proof-btn" id="chkProofBtnLabel">📎 Attach screenshot</span>
+            </label>
+            <div id="chkProofPreview" class="checkout-proof-preview"></div>
+          </div>
         </div>
         <div class="checkout-order-totals">
           <div class="summary-row"><span>Subtotal</span><span id="chkSubDisplay" style="font-family:var(--font-serif)"></span></div>
           <div id="chkDiscWrap" class="summary-row" style="display:none;color:#8fd9a8;justify-content:space-between;width:100%"><span id="chkDiscLabel"></span><span id="chkDiscDisplay" style="font-family:var(--font-serif)"></span></div>
           <div class="summary-row chk-ship-main"><span>Shipping</span><div class="chk-ship-value-col"><span id="chkShipDisplay" style="font-family:var(--font-serif)"></span><div id="chkShipSub" class="checkout-ship-sub"></div></div></div>
-          <div class="summary-delivery-note" style="margin-top:-10px;margin-bottom:16px">Estimated delivery: 3–7 days</div>
+          <div class="summary-delivery-note" id="chkDeliveryEstimate" style="margin-top:-10px;margin-bottom:16px"></div>
           <div class="summary-divider"></div>
           <div class="summary-row total"><span>Total</span><span id="chkTotalDisplay" style="font-family:var(--font-serif)"></span></div>
         </div>
@@ -506,10 +520,12 @@ async function openCheckoutModal() {
       fillCheckoutAreas();
       syncCheckoutShipFromSelection();
       refreshCheckoutTotalsDisplay();
+      refreshDeliveryEstimate();
     });
     areaEl.addEventListener('change', () => {
       syncCheckoutShipFromSelection();
       refreshCheckoutTotalsDisplay();
+      refreshDeliveryEstimate();
     });
     document.getElementById('chkDetail').value = user?.address || '';
   } else {
@@ -520,10 +536,51 @@ async function openCheckoutModal() {
     if (ge && !ge.value) ge.value = sessionUser.email;
   }
 
-  document.getElementById('chkPayMethod')?.addEventListener('change', refreshCheckoutPaymentHint);
+  // Payment proof upload wiring
+  const payMethodEl = document.getElementById('chkPayMethod');
+  payMethodEl?.addEventListener('change', () => {
+    refreshCheckoutPaymentHint();
+    const proofBox = document.getElementById('chkProofBox');
+    const pay = payMethodEl.value;
+    if (proofBox) proofBox.style.display = (pay === 'InstaPay' || pay === 'Telda' || pay === 'Online Wallet') ? 'block' : 'none';
+  });
+  document.getElementById('chkProofFile')?.addEventListener('change', (e) => {
+    const file = e.target.files?.[0];
+    const preview = document.getElementById('chkProofPreview');
+    const label = document.getElementById('chkProofBtnLabel');
+    if (file && preview) {
+      const url = URL.createObjectURL(file);
+      preview.innerHTML = `<img src="${url}" style="max-width:100%;max-height:160px;object-fit:contain;margin-top:10px;border:1px solid var(--gray-200)" />`;
+      if (label) label.textContent = '✓ ' + file.name;
+    }
+  });
+
   refreshCheckoutPaymentHint();
   refreshCheckoutTotalsDisplay();
+  refreshDeliveryEstimate();
   overlay.classList.add('open');
+}
+
+function refreshDeliveryEstimate() {
+  const el = document.getElementById('chkDeliveryEstimate');
+  if (!el) return;
+  const gsel = document.getElementById('chkGov');
+  const asel = document.getElementById('chkArea');
+  const govId = gsel?.value || '';
+  const areaId = asel?.value || '';
+  const zones = __checkoutZonesCfg.zones || [];
+  let estimate = '';
+  if (govId && zones.length) {
+    const zone = zones.find((z) => String(z.id) === String(govId));
+    if (zone) {
+      if (areaId && Array.isArray(zone.areas)) {
+        const area = zone.areas.find((a) => String(a.id) === String(areaId));
+        if (area?.deliveryDays) estimate = area.deliveryDays;
+      }
+      if (!estimate && zone.deliveryDays) estimate = zone.deliveryDays;
+    }
+  }
+  el.textContent = estimate ? `Estimated delivery: ${estimate}` : 'Estimated delivery: 3\u20137 days';
 }
 
 function closeCheckoutModal() {
@@ -579,6 +636,32 @@ async function submitCheckout() {
 
   const { subtotal, discount, shipping, total } = computeCheckoutModalTotals();
   const items = Cart.get();
+  
+  // Payment proof check and upload
+  let paymentProofUrl = null;
+  if (pay === 'InstaPay' || pay === 'Telda' || pay === 'Online Wallet') {
+    const fileEl = document.getElementById('chkProofFile');
+    const file = fileEl?.files?.[0];
+    if (!file) {
+      showToast('Please attach your payment screenshot');
+      return;
+    }
+    const btn = document.getElementById('chkPlaceBtn');
+    if (btn) btn.textContent = 'Uploading...';
+    try {
+      const up = await EyeApi.uploadOrderProofBlob(file, file.type);
+      if (!up.ok) throw new Error(up.error || 'Upload failed');
+      paymentProofUrl = up.url;
+    } catch (err) {
+      if (btn) btn.textContent = __cartUi.checkoutPlaceLabel || 'Place Order';
+      showToast('Could not upload screenshot. ' + err.message);
+      return;
+    }
+  }
+  
+  const btn = document.getElementById('chkPlaceBtn');
+  if (btn) btn.textContent = 'Processing...';
+
   const newOrder = {
     date: new Date().toISOString().split('T')[0],
     status: 'Pending',
@@ -598,6 +681,7 @@ async function submitCheckout() {
     total,
     coupon_code: appliedCoupon ? appliedCoupon.code : null,
     address: `${isGuest ? `Username: ${guestUsername} | ` : ''}Phone: ${phone}${isGuest ? ` | Email: ${guestEmail}` : ''} | Address: ${addr}`,
+    payment_proof_url: paymentProofUrl,
   };
 
   const res = await EyeApi.saveOrder(newOrder);
@@ -647,8 +731,12 @@ async function submitCheckout() {
     console.warn('Webhook notification failed:', webhookErr);
   }
 
-  if (user && user.address !== addr) {
-    await EyeApi.saveProfileRemote({ name: user.name, phone, address: addr });
+  if (user) {
+    const d = document.getElementById('chkDetail');
+    const rawDetail = d ? d.value.trim() : document.getElementById('chkAddress')?.value.trim() || '';
+    if (rawDetail && user.address !== rawDetail) {
+      await EyeApi.saveProfileRemote({ name: user.name, phone, address: rawDetail });
+    }
   }
 
   const { data: postSess } = await EyeApi.client.auth.getSession();

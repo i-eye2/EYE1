@@ -77,31 +77,34 @@ function renderContactPage(t) {
 
 async function submitContactForm(e) {
   e.preventDefault();
-  const fd = new FormData(e.target);
+  const form = e.target;
+  const btn = form.querySelector('button[type="submit"]');
+  const oldText = btn.textContent;
+
+  const fd = new FormData(form);
   const name = String(fd.get('name') || '').trim();
   const email = String(fd.get('email') || '').trim();
   const message = String(fd.get('message') || '').trim();
-  const raw = await EyeApi.getSiteSetting('contact_page');
-  let c = {};
+
+  if (!name || !email || !message) return;
+
+  btn.disabled = true;
+  btn.textContent = 'Sending...';
+
   try {
-    c = JSON.parse(raw || '{}');
-  } catch (_) {}
-  const to = (c.email || '').trim();
-  const wa = (c.whatsapp || c.phone || '').trim();
-  const subject = encodeURIComponent(`EYE contact — ${name}`);
-  const body = encodeURIComponent(`From: ${name} <${email}>\n\n${message}`);
-  await EyeApi.saveContactMessage({ name, email, message }).catch(() => {});
-  if (wa) {
-    const waNum = String(wa).replace(/\D/g, '');
-    if (waNum) {
-      const waText = encodeURIComponent(`Name: ${name}\nEmail: ${email}\n\n${message}`);
-      window.open(`https://wa.me/${waNum}?text=${waText}`, '_blank', 'noopener');
+    const res = await EyeApi.saveContactMessage({ name, email, message });
+    if (res.ok) {
+      showToast('Message sent successfully');
+      form.reset();
+    } else {
+      showToast('Failed to send message: ' + (res.error || 'Unknown error'));
     }
-  }
-  if (to) {
-    window.location.href = `mailto:${to}?subject=${subject}&body=${body}`;
-  } else {
-    showToast('Sent');
+  } catch (err) {
+    console.error('Contact Form Error:', err);
+    showToast('An error occurred. Please try again.');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = oldText;
   }
 }
 

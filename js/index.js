@@ -42,16 +42,19 @@ function renderFeaturedProgressive(list) {
   __homeRenderToken += 1;
   const token = __homeRenderToken;
   if (!list.length) {
-    gridEl.innerHTML =
-      '<p style="grid-column:1/-1;text-align:center;color:var(--gray-500);padding:40px">No products in the database yet. Add products in Supabase or the admin panel.</p>';
+    gridEl.innerHTML = '<p style="text-align:center;color:var(--gray-500);padding:40px">No products yet.</p>';
+    return;
+  }
+  const isMobile = window.matchMedia('(max-width: 768px)').matches;
+  if (isMobile) {
+    gridEl.innerHTML = list.map(renderProductCard).join('');
     return;
   }
   gridEl.innerHTML = '';
-  const chunk = window.matchMedia('(max-width: 768px)').matches ? 2 : 4;
   let i = 0;
   const step = () => {
     if (token !== __homeRenderToken) return;
-    const end = Math.min(i + chunk, list.length);
+    const end = Math.min(i + 4, list.length);
     gridEl.insertAdjacentHTML('beforeend', list.slice(i, end).map(renderProductCard).join(''));
     i = end;
     if (i < list.length) requestAnimationFrame(step);
@@ -116,7 +119,7 @@ function renderCategoryGrid(categories) {
       const href = `shop.html?cat=${encodeURIComponent(c.id)}`;
       return `
     <div class="cat-item" onclick="location.href='${href}'">
-      <img src="${img}" alt="${name}" loading="lazy" />
+      <img src="${img}" alt="${name}" loading="lazy" decoding="async" />
       <div class="cat-overlay">
         <div class="cat-label">${name}</div>
         <a href="${href}" class="cat-link">Shop Now</a>
@@ -140,7 +143,7 @@ function renderProductCard(p) {
     <div class="product-card" data-product-id="${p.id}" onclick="location.href='${encHref}'">
       <div class="product-img-wrap">
         ${p.badge ? `<div style="position:absolute;top:12px;left:12px;z-index:2;background:var(--white);color:var(--black);font-size:9px;letter-spacing:.15em;text-transform:uppercase;padding:4px 10px;">${escapeHtml(p.badge)}</div>` : ''}
-        <img src="${escapeHtml(p.image)}" alt="${escapeHtml(p.name)}" loading="lazy" />
+        <img src="${escapeHtml(p.image)}" alt="${escapeHtml(p.name)}" loading="lazy" decoding="async" />
         <div class="product-overlay">
           <button${btnAttrs}>${btnLabel}</button>
         </div>
@@ -264,19 +267,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       </div>`;
     }
 
-    const stats = hp.stats || [];
-    const statsEl = document.getElementById('statsRowMount');
-    if (statsEl) {
-      statsEl.innerHTML = stats
-        .map(
-          (s) => `
-      <div class="stat-item">
-        <div class="stat-number">${escapeHtml(s.number || '')}</div>
-        <div class="stat-label">${escapeHtml(s.label || '')}</div>
-      </div>`
-        )
-        .join('');
-    }
 
     const nl = hp.newsletter || {};
     const nlEl = document.getElementById('newsletterSectionMount');
@@ -320,3 +310,90 @@ document.addEventListener('DOMContentLoaded', async () => {
   } finally {}
 });
 
+/* ── Feedback Slider ─────────────────────────────────── */
+function renderFeedbackCard(f) {
+  const imgBlock = f.image_url
+    ? `<img src="${escapeHtml(f.image_url)}" class="feedback-card-img" alt="" loading="lazy" decoding="async" />`
+    : '';
+  const initial = (f.author_name || 'A').charAt(0).toUpperCase();
+  const dateStr = f.created_at
+    ? new Date(f.created_at).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })
+    : '';
+  return `
+    <div class="feedback-card">
+      ${imgBlock}
+      <div class="feedback-stars">
+        ${'x'.repeat(f.rating).split('').map(() => '<span class="star">\u2605</span>').join('')}
+        ${'x'.repeat(5 - f.rating).split('').map(() => '<span class="star empty">\u2606</span>').join('')}
+      </div>
+      <p class="feedback-comment">${escapeHtml(f.comment || '')}</p>
+      <div class="feedback-meta">
+        <div class="feedback-avatar">${escapeHtml(initial)}</div>
+        <div>
+          <div class="feedback-name">${escapeHtml(f.author_name || 'Customer')}</div>
+          <div class="feedback-date">${dateStr}</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function initFeedbackSlider() {
+  const slider = document.getElementById('feedbackSlider');
+  const dotsEl = document.getElementById('feedbackDots');
+  if (!slider) return;
+
+  let feedbacks = [];
+  try { feedbacks = await EyeApi.fetchFeedbacks(); } catch (_) {}
+  if (!feedbacks || !feedbacks.length) {
+    slider.innerHTML = '<div style="padding:40px 0;color:var(--gray-500);font-size:14px;text-align:center;width:100%">No reviews yet \u2014 be the first!</div>';
+    return;
+  }
+
+  slider.innerHTML = feedbacks.map(renderFeedbackCard).join('');
+
+  // Dot indicators
+  if (dotsEl && feedbacks.length > 1) {
+    dotsEl.innerHTML = feedbacks.map((_, i) =>
+      `<button class="feedback-dot${i === 0 ? ' active' : ''}" aria-label="Slide ${i + 1}"></button>`
+    ).join('');
+    const dots = dotsEl.querySelectorAll('.feedback-dot');
+    const cards = slider.querySelectorAll('.feedback-card');
+    const updateDots = () => {
+      const sl = slider.scrollLeft;
+      const cardW = cards[0] ? cards[0].offsetWidth + 24 : 1;
+      const idx = Math.round(sl / cardW);
+      dots.forEach((d, i) => d.classList.toggle('active', i === idx));
+    };
+    slider.addEventListener('scroll', updateDots, { passive: true });
+    dots.forEach((dot, i) => {
+      dot.addEventListener('click', () => {
+        const cardW = cards[0] ? cards[0].offsetWidth + 24 : 0;
+        slider.scrollTo({ left: i * cardW, behavior: 'smooth' });
+      });
+    });
+  }
+
+  // Drag-to-scroll (desktop)
+  let isDown = false, startX = 0, scrollL = 0;
+  slider.addEventListener('mousedown', (e) => {
+    isDown = true;
+    slider.classList.add('is-dragging');
+    startX = e.pageX - slider.offsetLeft;
+    scrollL = slider.scrollLeft;
+  });
+  slider.addEventListener('mouseleave', () => { isDown = false; slider.classList.remove('is-dragging'); });
+  slider.addEventListener('mouseup', () => { isDown = false; slider.classList.remove('is-dragging'); });
+  slider.addEventListener('mousemove', (e) => {
+    if (!isDown) return;
+    e.preventDefault();
+    const x = e.pageX - slider.offsetLeft;
+    slider.scrollLeft = scrollL - (x - startX) * 1.2;
+  });
+}
+
+// Auto-init feedback slider when page loads
+document.addEventListener('DOMContentLoaded', () => {
+  const isMobile = window.matchMedia('(max-width: 768px)').matches;
+  const delay = isMobile ? 2000 : 500;
+  setTimeout(() => initFeedbackSlider(), delay);
+});

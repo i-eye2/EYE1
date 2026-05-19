@@ -21,6 +21,8 @@ function showPage(name, el) {
   if (name === 'analytics') initAnalytics();
   if (name === 'contact-admin') initContactAdmin();
   if (name === 'settings') initSettings();
+  if (name === 'feedback') renderFeedbackAdminTable();
+  if (name === 'logs') renderLogsTable();
 }
 
 function statusBadge(s) {
@@ -40,6 +42,7 @@ function paymentMethodPill(m) {
   if (v.includes('telda')) return '<span class="pay-method pay-method-telda">Telda</span>';
   if (v.includes('insta')) return '<span class="pay-method pay-method-insta">InstaPay</span>';
   if (v.includes('cash')) return '<span class="pay-method pay-method-cod">COD</span>';
+  if (v.includes('online')) return '<span class="pay-method pay-method-online">Online Wallet</span>';
   return `<span class="pay-method pay-method-other">${escapeHtml(m || '—')}</span>`;
 }
 
@@ -48,56 +51,8 @@ function closeOrderDetailModal() {
 }
 
 function openOrderDetailModal(orderId) {
-  closeOrderDetailModal();
-  const o = _adminOrdersCache.find((x) => String(x.id) === String(orderId));
-  if (!o) return;
-  const items = Array.isArray(o.items) ? o.items : [];
-  const lines = items
-    .map((it) => {
-      const img = it.image || it.imageUrl || '';
-      const nm = it.name || 'Item';
-      return `<div class="order-detail-line">
-        <div class="order-detail-line-img">${img ? `<img src="${escapeHtml(img)}" alt="" / loading="lazy">` : '<span class="order-detail-ph">—</span>'}</div>
-        <div class="order-detail-line-body">
-          <div class="order-detail-line-name">${escapeHtml(nm)}</div>
-          <div class="order-detail-line-meta">${escapeHtml(it.size || '')} · Qty ${escapeHtml(String(it.qty || 0))} · ${formatPrice(it.price)}</div>
-        </div>
-      </div>`;
-    })
-    .join('');
-  const wrap = document.createElement('div');
-  wrap.id = 'orderDetailOverlay';
-  wrap.className = 'modal-overlay modal-overlay-top open';
-  wrap.innerHTML = `<div class="modal modal-order-detail" onclick="event.stopPropagation()">
-    <div class="modal-header">
-      <div class="modal-title">Order ${escapeHtml(o.id)}</div>
-      <button type="button" class="modal-close" onclick="closeOrderDetailModal()">✕</button>
-    </div>
-    <div class="order-detail-body">
-      <div class="order-detail-grid">
-        <div><span class="od-label">Date</span><span class="od-val">${escapeHtml(formatDate(o.date || o.created_at))}</span></div>
-        <div><span class="od-label">Payment</span><span class="od-val">${paymentMethodPill(o.payment_method)} ${paymentBadge(o.payment_status)}</span></div>
-        <div><span class="od-label">Status</span><span class="od-val">${statusBadge(o.status)}</span></div>
-      </div>
-      <div class="order-detail-totals">
-        <div class="od-total-row"><span>Subtotal</span><span>${formatPrice(Number(o.subtotal != null ? o.subtotal : o.total) || 0)}</span></div>
-        ${
-          Number(o.discount) > 0
-            ? `<div class="od-total-row od-total-disc"><span>Discount</span><span>−${formatPrice(Number(o.discount))}</span></div>`
-            : ''
-        }
-        <div class="od-total-row"><span>Shipping</span><span>${Number(o.shipping) === 0 ? 'Free' : formatPrice(Number(o.shipping || 0))}</span></div>
-        <div class="od-total-row od-total-grand"><span>Total</span><span>${formatPrice(o.total)}</span></div>
-      </div>
-      <div class="od-label" style="margin:20px 0 10px">Shipping address</div>
-      <div class="order-detail-address">${escapeHtml(o.address || '—')}</div>
-      <div class="od-label" style="margin:20px 0 10px">Line items</div>
-      <div class="order-detail-lines">${lines || '<p style="color:var(--gray-500)">No line items</p>'}</div>
-    </div>
-  </div>`;
-  wrap.onclick = () => closeOrderDetailModal();
-  wrap.querySelector('.modal').onclick = (e) => e.stopPropagation();
-  document.body.appendChild(wrap);
+  // Navigate to admin order page instead of modal
+  location.href = `admin-order.html?id=${encodeURIComponent(orderId)}`;
 }
 
 function last6MonthBuckets() {
@@ -322,12 +277,12 @@ async function openProductModal(id) {
         <label class="form-label">Categories</label>
         <div style="display:flex;gap:16px;flex-wrap:wrap;padding:8px 0;">
           ${categories.map(c => {
-            const isSel = p && p.category && p.category.split(',').map(s=>s.trim()).includes(String(c.id));
-            return `<label style="display:flex;align-items:center;gap:6px;cursor:pointer;color:var(--white);font-size:14px;">
+    const isSel = p && p.category && p.category.split(',').map(s => s.trim()).includes(String(c.id));
+    return `<label style="display:flex;align-items:center;gap:6px;cursor:pointer;color:var(--white);font-size:14px;">
                       <input type="checkbox" name="pCat" value="${escapeHtml(c.id)}" ${isSel ? 'checked' : ''} />
                       ${escapeHtml(c.name)}
                     </label>`;
-          }).join('')}
+  }).join('')}
         </div>
       </div>
       <div class="form-field">
@@ -507,38 +462,60 @@ async function renderOrdersTable(filter, tabEl) {
   _adminOrdersCache = orders;
   const users = await EyeApi.fetchUsers();
   document.getElementById('ordersTable').innerHTML = `
-    <thead><tr><th></th><th>Order ID</th><th>Date</th><th>Customer</th><th>Total</th><th>Method</th><th>Fulfillment</th><th>Payment</th><th>Actions</th></tr></thead>
+    <thead><tr><th></th><th>Order ID</th><th>Date</th><th>Customer</th><th>Total</th><th>Method</th><th>Proof</th><th>Fulfillment</th><th>Payment</th><th>Actions</th></tr></thead>
     <tbody>${orders
       .map((o) => {
         const u = users.find((x) => String(x.id) === String(o.userId || o.user_id));
         const oid = JSON.stringify(o.id);
-        return `<tr>
-        <td><button type="button" class="order-detail-icon" title="View details" aria-label="View order" onclick='openOrderDetailModal(${JSON.stringify(o.id)})'>◇</button></td>
-        <td style="font-weight:500;color:var(--white)">${escapeHtml(o.id)}</td>
-        <td>${formatDate(o.date || o.created_at)}</td>
-        <td>${escapeHtml(u?.name || '—')}</td>
-        <td style="font-family:var(--font-serif);color:var(--white)">${formatPrice(o.total)}</td>
-        <td>${paymentMethodPill(o.payment_method)}</td>
+        // Extract name/phone from address field
+        let customerName = u?.name || '—';
+        let customerPhone = '';
+        if (o.address) {
+          const nm = o.address.match(/Username:\s*([^|]+)/);
+          const ph = o.address.match(/Phone:\s*([^|]+)/);
+          if (nm) customerName = nm[1].trim();
+          if (ph) customerPhone = ph[1].trim();
+        }
+        // Payment proof thumbnail
+        const hasProof = o.payment_proof_url && String(o.payment_proof_url).toLowerCase() !== 'null' && String(o.payment_proof_url).toLowerCase() !== 'undefined';
+        const proofThumb = hasProof
+          ? `<img src="${escapeHtml(o.payment_proof_url)}" class="order-proof-thumb" onclick="openProofZoom('${escapeHtml(o.payment_proof_url)}')" title="Click to zoom" />`
+          : '<span style="color:var(--gray-500);font-size:10px">—</span>';
+        return `<tr onclick="location.href='admin-order.html?id=${encodeURIComponent(o.id)}'" style="cursor:pointer">
+        <td><a href="admin-order.html?id=${encodeURIComponent(o.id)}" class="order-detail-icon" onclick="event.stopPropagation()" title="View order details" aria-label="View order">◇</a></td>
+        <td style="font-weight:600;color:var(--gold);font-family:monospace;font-size:12px;letter-spacing:.05em">${escapeHtml(o.id)}</td>
+        <td style="font-size:12px;color:var(--gray-600)">${formatDate(o.date || o.created_at)}</td>
         <td>
+          <div style="display:flex;flex-direction:column;gap:2px">
+            <span style="font-weight:500;color:var(--white);font-size:13px">${escapeHtml(customerName)}</span>
+            ${customerPhone ? `<span style="font-size:11px;color:var(--gray-500)">${escapeHtml(customerPhone)}</span>` : ''}
+          </div>
+        </td>
+        <td style="font-family:var(--font-serif);color:var(--white);font-size:15px">${formatPrice(o.total)}</td>
+        <td>${paymentMethodPill(o.payment_method)}</td>
+        <td class="order-proof-cell" onclick="event.stopPropagation()">${proofThumb}</td>
+        <td onclick="event.stopPropagation()">
           <select class="status-select" style="font-size:10px" onchange='updateOrderRow(${oid},"status",this.value)'>
             ${['Pending', 'Processing', 'Shipped', 'Delivered', 'Returned']
-              .map((s) => `<option ${o.status === s ? 'selected' : ''}>${s}</option>`)
-              .join('')}
+            .map((s) => `<option ${o.status === s ? 'selected' : ''}>${s}</option>`)
+            .join('')}
           </select>
         </td>
-        <td>
+        <td onclick="event.stopPropagation()">
           <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-start">
             ${paymentBadge(o.payment_status)}
             <select class="status-select" style="font-size:10px" onchange='updateOrderRow(${oid},"payment_status",this.value)'>
               ${['Pending', 'Paid', 'Failed', 'Refunded']
-                .map((s) => `<option ${(o.payment_status || 'Pending') === s ? 'selected' : ''}>${s}</option>`)
-                .join('')}
+            .map((s) => `<option ${(o.payment_status || 'Pending') === s ? 'selected' : ''}>${s}</option>`)
+            .join('')}
             </select>
           </div>
         </td>
-        <td>
+        <td onclick="event.stopPropagation()">
           <div style="display:flex;flex-direction:column;gap:6px">
+            <a href="admin-order.html?id=${encodeURIComponent(o.id)}" class="action-btn action-btn-edit" style="text-decoration:none;display:inline-block;text-align:center">View</a>
             <button class="action-btn action-btn-edit" onclick='printOrder(${oid})'>Print</button>
+            <button class="action-btn action-btn-del" onclick='deleteOrder(${oid}, event)'>Delete</button>
           </div>
         </td>
       </tr>`;
@@ -546,8 +523,46 @@ async function renderOrdersTable(filter, tabEl) {
       .join('')}</tbody>`;
 }
 
+function openProofZoom(url) {
+  const old = document.getElementById('proofZoomOverlay');
+  if (old) old.remove();
+  const div = document.createElement('div');
+  div.id = 'proofZoomOverlay';
+  div.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:flex;align-items:center;justify-content:center;cursor:zoom-out;backdrop-filter:blur(8px)';
+  div.innerHTML = `
+    <div style="position:relative;max-width:90vw;max-height:90vh">
+      <img src="${escapeHtml(url)}" style="max-width:90vw;max-height:85vh;object-fit:contain;border:1px solid rgba(201,168,76,.3);box-shadow:0 0 80px rgba(0,0,0,.8)" />
+      <button onclick="document.getElementById('proofZoomOverlay').remove()" style="position:absolute;top:-16px;right:-16px;width:36px;height:36px;background:var(--gold);border:none;color:#000;font-size:18px;cursor:pointer;border-radius:50%;font-weight:bold;line-height:1">✕</button>
+      <a href="${escapeHtml(url)}" target="_blank" style="position:absolute;bottom:-40px;left:50%;transform:translateX(-50%);color:var(--gold);font-size:11px;letter-spacing:.15em;text-transform:uppercase;text-decoration:none">Open full size ↗</a>
+    </div>`;
+  div.onclick = (e) => { if (e.target === div) div.remove(); };
+  document.body.appendChild(div);
+}
+
 function filterAdminOrders(val, btn) {
   renderOrdersTable(val, btn);
+}
+
+function searchAdminOrders(val) {
+  const v = (val || '').toLowerCase().trim();
+  const tbody = document.querySelector('#ordersTable tbody');
+  if (!tbody) return;
+  tbody.querySelectorAll('tr').forEach(tr => {
+    const text = tr.textContent.toLowerCase();
+    tr.style.display = text.includes(v) ? '' : 'none';
+  });
+}
+
+async function deleteOrder(id, ev) {
+  if (ev) ev.stopPropagation();
+  if (!confirm('Are you sure you want to permanently delete this order?')) return;
+  const { ok, error } = await EyeApi.adminDeleteOrder(id);
+  if (!ok) {
+    showToast(error || 'Delete failed');
+    return;
+  }
+  showToast('Order deleted');
+  renderOrdersTable('all'); // Refresh current view
 }
 
 async function updateOrderRow(id, field, value) {
@@ -1015,13 +1030,13 @@ async function initContactAdmin() {
   if (mnt) {
     mnt.innerHTML = rows.length
       ? `<table><thead><tr><th>Date</th><th>Name</th><th>Email</th><th>Message</th></tr></thead><tbody>${rows
-          .map(
-            (r) =>
-              `<tr><td>${formatDate(r.created_at)}</td><td style="color:var(--white)">${escapeHtml(r.name || '—')}</td><td>${escapeHtml(
-                r.email || '—'
-              )}</td><td style="max-width:420px;white-space:normal;line-height:1.6">${escapeHtml(r.message || '')}</td></tr>`
-          )
-          .join('')}</tbody></table>`
+        .map(
+          (r) =>
+            `<tr><td>${formatDate(r.created_at)}</td><td style="color:var(--white)">${escapeHtml(r.name || '—')}</td><td>${escapeHtml(
+              r.email || '—'
+            )}</td><td style="max-width:420px;white-space:normal;line-height:1.6">${escapeHtml(r.message || '')}</td></tr>`
+        )
+        .join('')}</tbody></table>`
       : '<p style="color:var(--gray-500);font-size:12px">No messages yet. (Requires `contact_messages` table in Supabase.)</p>';
   }
 }
@@ -1118,11 +1133,11 @@ async function initAnalytics() {
   if (stEl) {
     stEl.innerHTML = Object.keys(st).length
       ? `<div class="chart-bars">${Object.entries(st)
-          .map(
-            ([k, v]) =>
-              `<div class="chart-bar-wrap"><div class="chart-bar-val">${v}</div><div class="chart-bar" style="height:${(v / stMax) * 100}%;background:linear-gradient(180deg,var(--gold),#6a5a32)"></div><div class="chart-bar-label">${escapeHtml(k)}</div></div>`
-          )
-          .join('')}</div>`
+        .map(
+          ([k, v]) =>
+            `<div class="chart-bar-wrap"><div class="chart-bar-val">${v}</div><div class="chart-bar" style="height:${(v / stMax) * 100}%;background:linear-gradient(180deg,var(--gold),#6a5a32)"></div><div class="chart-bar-label">${escapeHtml(k)}</div></div>`
+        )
+        .join('')}</div>`
       : '<p style="padding:24px;color:var(--gray-500);font-size:13px">No orders yet.</p>';
   }
 
@@ -1133,11 +1148,11 @@ async function initAnalytics() {
   if (pmEl) {
     pmEl.innerHTML = Object.keys(pm).length
       ? `<div class="chart-bars">${Object.entries(pm)
-          .map(
-            ([k, v]) =>
-              `<div class="chart-bar-wrap"><div class="chart-bar-val">${v}</div><div class="chart-bar" style="height:${(v / pmMax) * 100}%;background:#4a6fa5"></div><div class="chart-bar-label" style="font-size:8px">${escapeHtml(k)}</div></div>`
-          )
-          .join('')}</div>`
+        .map(
+          ([k, v]) =>
+            `<div class="chart-bar-wrap"><div class="chart-bar-val">${v}</div><div class="chart-bar" style="height:${(v / pmMax) * 100}%;background:#4a6fa5"></div><div class="chart-bar-label" style="font-size:8px">${escapeHtml(k)}</div></div>`
+        )
+        .join('')}</div>`
       : '<p style="padding:24px;color:var(--gray-500);font-size:13px">No payment data yet.</p>';
   }
 
@@ -1159,20 +1174,20 @@ async function initAnalytics() {
     if (aData) {
       const liveEl = document.getElementById('analyticsLiveVisitors');
       if (liveEl) liveEl.textContent = aData.liveVisitors;
-      
+
       const todayEl = document.getElementById('analyticsTodayVisitors');
       if (todayEl) todayEl.textContent = aData.todayVisitors;
 
       const vTable = document.getElementById('analyticsProductViewsTable');
       if (vTable) {
-        vTable.innerHTML = `<thead><tr><th>Product</th><th>Views</th><th>Avg Time</th></tr></thead><tbody>${aData.productStats.slice(0, 10).map(s => 
+        vTable.innerHTML = `<thead><tr><th>Product</th><th>Views</th><th>Avg Time</th></tr></thead><tbody>${aData.productStats.slice(0, 10).map(s =>
           `<tr><td style="color:var(--white);font-size:13px">${escapeHtml(s.name || s.id)}</td><td>${s.views}</td><td>${s.avgDuration}s</td></tr>`
         ).join('')}</tbody>`;
-        if(!aData.productStats.length) {
-            vTable.innerHTML = '<tbody><tr><td colspan="3" style="color:var(--gray-500);padding:16px">No product views recorded yet.</td></tr></tbody>';
+        if (!aData.productStats.length) {
+          vTable.innerHTML = '<tbody><tr><td colspan="3" style="color:var(--gray-500);padding:16px">No product views recorded yet.</td></tr></tbody>';
         }
       }
-      
+
       const tProdEl = document.getElementById('analyticsTrendingProduct');
       const tStatsEl = document.getElementById('analyticsTrendingStats');
       if (tProdEl && tStatsEl) {
@@ -1191,23 +1206,23 @@ async function initAnalytics() {
 
 // Polling for live analytics
 setInterval(() => {
-    if (document.getElementById('page-analytics')?.classList.contains('active')) {
-        initAnalytics();
-    }
+  if (document.getElementById('page-analytics')?.classList.contains('active')) {
+    initAnalytics();
+  }
 }, 30000);
 
 function printOrder(orderId) {
   const o = _adminOrdersCache.find((x) => String(x.id) === String(orderId));
   if (!o) return;
   showToast('Generating Order PDF...');
-  
+
   const d = new Date(o.date || o.created_at).toLocaleDateString('en-GB', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   const u = EyeApi.hasRemote() && _adminOrdersCache.users ? _adminOrdersCache.users.find(x => String(x.id) === String(o.userId || o.user_id)) : null;
-  
+
   let rawAddr = o.address || '—';
   let parsedName = null;
   let parsedPhone = null;
-  
+
   if (rawAddr.includes('|')) {
     const parts = rawAddr.split('|').map(p => p.trim());
     parts.forEach(p => {
@@ -1217,11 +1232,11 @@ function printOrder(orderId) {
     const addrPart = parts.find(p => p.startsWith('Address:'));
     if (addrPart) rawAddr = addrPart.replace('Address:', '').trim();
   }
-  
+
   const cName = escapeHtml(parsedName || u?.name || 'Customer');
   const cPhone = escapeHtml(parsedPhone || u?.phone || '—');
   const cAddress = escapeHtml(rawAddr);
-  
+
   const html = `
     <div style="font-family: Arial, sans-serif; padding: 20mm; background-color: #050505; color: #fff; width: 100%; min-height: 297mm; box-sizing: border-box;">
       <div style="display: flex; justify-content: space-between; border-bottom: 2px solid #c9a84c; padding-bottom: 20px; margin-bottom: 30px;">
@@ -1295,7 +1310,7 @@ function printOrder(orderId) {
 
   const container = document.createElement('div');
   container.innerHTML = html;
-  
+
   html2pdf().set({
     margin: 0,
     filename: `EYE_Order_${o.id}.pdf`,
@@ -1303,26 +1318,26 @@ function printOrder(orderId) {
     html2canvas: { scale: 2, useCORS: true },
     jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
   }).from(container).save().then(() => {
-      showToast('PDF Downloaded');
+    showToast('PDF Downloaded');
   });
 }
 
 async function exportPdfReport() {
-    showToast('Generating Summary PDF...');
-    const d = new Date().toLocaleDateString('en-GB', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-    
-    // Gather stats safely
-    const revAll = document.querySelector('#analyticsStats .stat-card:nth-child(3) .stat-card-value')?.textContent || '0';
-    const orders30 = document.querySelector('#analyticsStats .stat-card:nth-child(2) .stat-card-value')?.textContent || '0';
-    const liveVis = document.getElementById('analyticsLiveVisitors')?.textContent || '0';
-    const trendProd = document.getElementById('analyticsTrendingProduct')?.textContent || 'None';
-    const trendStats = document.getElementById('analyticsTrendingStats')?.textContent || '';
-    
-    // Convert top products tables to static HTML strings
-    const topProdHTML = document.getElementById('analyticsTopProducts')?.outerHTML || '<p>No data</p>';
-    const viewsHTML = document.getElementById('analyticsProductViewsTable')?.outerHTML || '<p>No data</p>';
-    
-    const html = `
+  showToast('Generating Summary PDF...');
+  const d = new Date().toLocaleDateString('en-GB', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+  // Gather stats safely
+  const revAll = document.querySelector('#analyticsStats .stat-card:nth-child(3) .stat-card-value')?.textContent || '0';
+  const orders30 = document.querySelector('#analyticsStats .stat-card:nth-child(2) .stat-card-value')?.textContent || '0';
+  const liveVis = document.getElementById('analyticsLiveVisitors')?.textContent || '0';
+  const trendProd = document.getElementById('analyticsTrendingProduct')?.textContent || 'None';
+  const trendStats = document.getElementById('analyticsTrendingStats')?.textContent || '';
+
+  // Convert top products tables to static HTML strings
+  const topProdHTML = document.getElementById('analyticsTopProducts')?.outerHTML || '<p>No data</p>';
+  const viewsHTML = document.getElementById('analyticsProductViewsTable')?.outerHTML || '<p>No data</p>';
+
+  const html = `
         <div style="font-family: Arial, sans-serif; padding: 20mm; background-color: #050505; color: #fff; width: 100%; min-height: 297mm; box-sizing: border-box;">
             <div style="text-align: center; border-bottom: 2px solid #c9a84c; padding-bottom: 20px; margin-bottom: 30px;">
                 <h1 style="margin: 0; font-family: Georgia, serif; font-size: 32px; letter-spacing: 2px; text-transform: uppercase; color: #fff;">EYE Store</h1>
@@ -1397,19 +1412,19 @@ async function exportPdfReport() {
             
         </div>
     `;
-    
-    const container = document.createElement('div');
-    container.innerHTML = html;
-    
-    html2pdf().set({
-        margin: 0,
-        filename: 'EYE_Store_Summary.pdf',
-        image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true },
-        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-    }).from(container).save().then(() => {
-        showToast('Summary PDF Downloaded');
-    });
+
+  const container = document.createElement('div');
+  container.innerHTML = html;
+
+  html2pdf().set({
+    margin: 0,
+    filename: 'EYE_Store_Summary.pdf',
+    image: { type: 'jpeg', quality: 0.98 },
+    html2canvas: { scale: 2, useCORS: true },
+    jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+  }).from(container).save().then(() => {
+    showToast('Summary PDF Downloaded');
+  });
 }
 
 async function siteImageUpload(ev, which) {
@@ -1437,6 +1452,14 @@ async function mergeHomepageImageListsAndSave() {
   const r = await EyeApi.adminSetSiteSetting('homepage', ta.value);
   if (!r.ok) showToast('Save failed');
   else showToast('Homepage images saved');
+}
+
+async function clearTodayAnalytics() {
+  if (!confirm('Are you sure you want to clear all Live & Today analytics?')) return;
+  const { ok, error } = await EyeApi.adminClearTodayAnalytics();
+  if (!ok) return showToast(error || 'Failed to clear');
+  showToast('Analytics cleared');
+  setTimeout(() => location.reload(), 1000);
 }
 
 async function initSettings() {
@@ -1479,8 +1502,10 @@ async function initSettings() {
   const w = await EyeApi.fetchPaymentWallets();
   const wt = document.getElementById('walletTelda');
   const wi = document.getElementById('walletInsta');
+  const wo = document.getElementById('walletOnline');
   if (wt) wt.value = w.telda || '';
   if (wi) wi.value = w.instapay || '';
+  if (wo) wo.value = w.online || '';
   await renderAnnouncementsAdmin();
   await renderNavAdmin();
   await renderCategoriesAdmin();
@@ -1498,7 +1523,10 @@ async function saveHomepageJson() {
   fillImageLinesFromHomepage(hp);
   const r = await EyeApi.adminSetSiteSetting('homepage', raw);
   if (!r.ok) showToast('Save failed');
-  else showToast('Homepage JSON saved');
+  else {
+    showToast('Homepage JSON saved');
+    EyeApi.writeLog('UPDATE_HOMEPAGE', 'site_settings', 'homepage', 'Admin updated homepage layout and content');
+  }
 }
 
 async function saveContactPageJson() {
@@ -1512,7 +1540,10 @@ async function saveContactPageJson() {
   }
   const r = await EyeApi.adminSetSiteSetting('contact_page', raw);
   if (!r.ok) showToast('Save failed');
-  else showToast('Contact page saved');
+  else {
+    showToast('Contact page saved');
+    EyeApi.writeLog('UPDATE_CONTACT_PAGE', 'site_settings', 'contact_page', 'Admin updated contact page content');
+  }
 }
 
 async function saveLegalReturnsJson() {
@@ -1525,7 +1556,10 @@ async function saveLegalReturnsJson() {
   }
   const r = await EyeApi.adminSetSiteSetting('legal_returns', raw);
   if (!r.ok) showToast('Save failed');
-  else showToast('Legal JSON saved');
+  else {
+    showToast('Legal JSON saved');
+    EyeApi.writeLog('UPDATE_LEGAL', 'site_settings', 'legal_returns', 'Admin updated legal/returns policy JSON');
+  }
 }
 
 async function saveLegalReturnsBodySimple() {
@@ -1555,15 +1589,20 @@ async function saveShippingAndMarquee() {
   const mq = document.getElementById('marqueeText').value;
   await EyeApi.adminSetSiteSetting('shipping_free_threshold_egp', ship);
   await EyeApi.setMarqueeText(mq);
+  EyeApi.writeLog('UPDATE_SETTINGS', 'site_settings', 'shipping_marquee', `Admin updated shipping threshold to ${ship} and marquee text`);
   showToast('Saved');
 }
 
 async function savePaymentWallets() {
   const telda = document.getElementById('walletTelda')?.value.trim() || '';
   const instapay = document.getElementById('walletInsta')?.value.trim() || '';
-  const r = await EyeApi.adminSetSiteSetting('payment_wallets_json', JSON.stringify({ telda, instapay }));
+  const online = document.getElementById('walletOnline')?.value.trim() || '';
+  const r = await EyeApi.adminSetSiteSetting('payment_wallets_json', JSON.stringify({ telda, instapay, online }));
   if (!r.ok) showToast('Save failed');
-  else showToast('Payment numbers saved');
+  else {
+    showToast('Payment numbers saved');
+    EyeApi.writeLog('UPDATE_PAYMENT_WALLETS', 'site_settings', 'payment_wallets', 'Admin updated Telda/InstaPay wallet details');
+  }
 }
 
 let __shipEditorCfg = null;
@@ -1591,7 +1630,8 @@ function shipEditorAreaRow(zi, ai, a) {
   return `<tr data-azi="${zi}" data-aai="${ai}">
     <td><input class="form-input ship-a-id" value="${escapeHtml(a.id || '')}" /></td>
     <td><input class="form-input ship-a-name" value="${escapeHtml(a.name || '')}" /></td>
-    <td><input class="form-input ship-a-egp" type="number" step="1" value="${escapeHtml(eg)}" placeholder="zone" /></td>
+    <td><input class="form-input ship-a-egp" type="number" step="1" value="${escapeHtml(eg)}" placeholder="zone" style="width:70px" /></td>
+    <td><input class="form-input ship-a-del" value="${escapeHtml(a.deliveryDays || '')}" placeholder="3-5 days" /></td>
     <td><button type="button" class="action-btn action-btn-del" onclick="shippingEditorRemoveArea(${zi},${ai})">×</button></td>
   </tr>`;
 }
@@ -1604,12 +1644,13 @@ function shipEditorZoneHtml(zone, zi) {
       <div class="ship-editor-zone-fields">
         <div class="form-field" style="margin:0"><label class="form-label">Governorate ID</label><input class="form-input ship-z-id" value="${escapeHtml(zone.id || '')}" placeholder="cairo" /></div>
         <div class="form-field" style="margin:0"><label class="form-label">Name</label><input class="form-input ship-z-name" value="${escapeHtml(zone.name || '')}" placeholder="Cairo" /></div>
-        <div class="form-field" style="margin:0"><label class="form-label">Zone EGP</label><input class="form-input ship-z-egp" type="number" step="1" value="${escapeHtml(zeg)}" placeholder="60" /></div>
+        <div class="form-field" style="margin:0"><label class="form-label">Zone EGP</label><input class="form-input ship-z-egp" type="number" step="1" value="${escapeHtml(zeg)}" placeholder="60" style="width:70px" /></div>
+        <div class="form-field" style="margin:0"><label class="form-label">Delivery Estimate</label><input class="form-input ship-z-del" value="${escapeHtml(zone.deliveryDays || '')}" placeholder="3-7 days" /></div>
       </div>
       <button type="button" class="btn btn-outline ship-editor-remove-zone" onclick="shippingEditorRemoveZone(${zi})">Remove zone</button>
     </div>
     <table class="ship-editor-area-table">
-      <thead><tr><th>City / area ID</th><th>Name</th><th>Shipping EGP</th><th></th></tr></thead>
+      <thead><tr><th>City / area ID</th><th>Name</th><th>Shipping EGP</th><th>Delivery Estimate</th><th></th></tr></thead>
       <tbody>${areas.length ? areas.map((a, ai) => shipEditorAreaRow(zi, ai, a)).join('') : ''}</tbody>
     </table>
     <button type="button" class="btn btn-gold ship-editor-add-area" onclick="shippingEditorAddArea(${zi})">+ Add city / area</button>
@@ -1639,19 +1680,23 @@ function shippingEditorSyncCfgFromDom() {
     const id = zEl.querySelector('.ship-z-id')?.value.trim() || '';
     const name = zEl.querySelector('.ship-z-name')?.value.trim() || id;
     const zegp = Number(zEl.querySelector('.ship-z-egp')?.value);
+    const zdel = zEl.querySelector('.ship-z-del')?.value.trim();
     const areas = [];
     zEl.querySelectorAll('tbody tr').forEach((tr) => {
       const aid = tr.querySelector('.ship-a-id')?.value.trim() || '';
       const an = tr.querySelector('.ship-a-name')?.value.trim() || aid;
       const aegpRaw = tr.querySelector('.ship-a-egp')?.value.trim();
       const aegp = aegpRaw !== '' && Number(aegpRaw) >= 0 ? Number(aegpRaw) : undefined;
+      const adel = tr.querySelector('.ship-a-del')?.value.trim();
       const row = { id: aid, name: an };
       if (aegp != null) row.shippingEgp = aegp;
+      if (adel) row.deliveryDays = adel;
       if (aid) areas.push(row);
     });
     if (id) {
       const z = { id, name, areas: areas.length ? areas : [{ id: `${id}-1`, name: 'Area' }] };
       if (Number.isFinite(zegp) && zegp >= 0) z.shippingEgp = zegp;
+      if (zdel) z.deliveryDays = zdel;
       zones.push(z);
     }
   });
@@ -1696,11 +1741,14 @@ async function saveShippingFromEditor() {
   if (ta) {
     try {
       ta.value = JSON.stringify(payload, null, 2);
-    } catch (_) {}
+    } catch (_) { }
   }
   const r = await EyeApi.adminSetSiteSetting('shipping_zones_json', JSON.stringify(payload));
   if (!r.ok) showToast('Save failed');
-  else showToast('Shipping rates saved');
+  else {
+    showToast('Shipping rates saved');
+    EyeApi.writeLog('UPDATE_SHIPPING', 'site_settings', 'shipping_zones_json', 'Admin updated shipping zones and delivery estimates');
+  }
 }
 
 async function saveShippingZonesJson() {
@@ -1767,7 +1815,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!prof) {
       showAdminGate(
         '<p style="color:var(--gray-500);line-height:1.6;margin-bottom:20px">You are signed in, but no <strong>profiles</strong> row was found. Run the project SQL (trigger <code>handle_new_user</code>) or insert a profile for your user id in Supabase.</p>' +
-          '<a class="btn btn-gold" href="profile.html" style="display:block;text-align:center;width:100%;padding:16px;text-decoration:none">Back to profile</a>'
+        '<a class="btn btn-gold" href="profile.html" style="display:block;text-align:center;width:100%;padding:16px;text-decoration:none">Back to profile</a>'
       );
       return;
     }
@@ -1775,12 +1823,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!isAdm) {
       showAdminGate(
         '<p style="color:var(--gray-500);line-height:1.6;margin-bottom:16px">This session is not treated as admin. The row in <strong>public.profiles</strong> for <em>this exact user id</em> must have <code style="color:var(--gold)">role</code> set to <code style="color:var(--gold)">admin</code> (same project as <code>js/config.js</code>).</p>' +
-          '<p style="color:var(--gray-500);font-size:12px;margin-bottom:20px;word-break:break-all">Signed-in user id:<br><code style="color:var(--gold)">' +
-          escapeHtml(uid) +
-          '</code></p>' +
-          '<p style="color:var(--gray-500);font-size:12px;margin-bottom:20px">SQL example: <code style="color:var(--gold)">update public.profiles set role = \'admin\' where id = \'…\';</code> then hard-refresh this page.</p>' +
-          '<a class="btn btn-gold" href="login.html?return=admin.html" style="display:block;text-align:center;width:100%;padding:16px;text-decoration:none;margin-bottom:12px">Switch account</a>' +
-          '<a href="profile.html" style="display:block;text-align:center;color:var(--gray-500);font-size:13px">Profile</a>'
+        '<p style="color:var(--gray-500);font-size:12px;margin-bottom:20px;word-break:break-all">Signed-in user id:<br><code style="color:var(--gold)">' +
+        escapeHtml(uid) +
+        '</code></p>' +
+        '<p style="color:var(--gray-500);font-size:12px;margin-bottom:20px">SQL example: <code style="color:var(--gold)">update public.profiles set role = \'admin\' where id = \'…\';</code> then hard-refresh this page.</p>' +
+        '<a class="btn btn-gold" href="login.html?return=admin.html" style="display:block;text-align:center;width:100%;padding:16px;text-decoration:none;margin-bottom:12px">Switch account</a>' +
+        '<a href="profile.html" style="display:block;text-align:center;color:var(--gray-500);font-size:13px">Profile</a>'
       );
       return;
     }
@@ -1794,3 +1842,113 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 });
 
+/* ── Feedback Admin ─────────────────────────────────────── */
+async function renderFeedbackAdminTable() {
+  const feedbacks = await EyeApi.fetchFeedbacksAdmin();
+  document.getElementById('feedbackTable').innerHTML = `
+    <thead><tr><th>Author</th><th>Rating</th><th>Comment</th><th>Status</th><th>Hidden</th><th>Created</th><th>Actions</th></tr></thead>
+    <tbody>${feedbacks.map(f => `
+      <tr>
+        <td>
+          <div style="display:flex;align-items:center;gap:12px">
+            ${f.image_url ? `<img src="${escapeHtml(f.image_url)}" class="product-thumb" / loading="lazy">` : '<div class="product-thumb" style="display:flex;align-items:center;justify-content:center;background:var(--gray-200);color:var(--gray-500);font-size:10px">No Img</div>'}
+            <span style="font-weight:500;color:var(--white)">${escapeHtml(f.author_name)}</span>
+          </div>
+        </td>
+        <td><div style="color:var(--gold);font-size:14px">${'★'.repeat(f.rating)}${'☆'.repeat(5 - f.rating)}</div></td>
+        <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;color:var(--gray-500)">${escapeHtml(f.comment)}</td>
+        <td><span class="badge ${f.is_approved ? 'badge-green' : 'badge-yellow'}">${f.is_approved ? 'Approved' : 'Pending'}</span></td>
+        <td><span class="badge ${f.is_hidden ? 'badge-red' : 'badge-gray'}">${f.is_hidden ? 'Hidden' : 'Visible'}</span></td>
+        <td style="font-size:11px;color:var(--gray-500)">${new Date(f.created_at).toLocaleDateString()}</td>
+        <td><div style="display:flex;gap:8px">
+          <button class="action-btn" onclick="openFeedbackModal('${f.id}')">Edit</button>
+          <button class="action-btn" onclick="toggleFeedbackApproval('${f.id}', ${!f.is_approved})">${f.is_approved ? 'Unapprove' : 'Approve'}</button>
+          <button class="action-btn" onclick="toggleFeedbackHidden('${f.id}', ${!f.is_hidden})">${f.is_hidden ? 'Show' : 'Hide'}</button>
+          <button class="action-btn action-btn-del" onclick="deleteFeedback('${f.id}')">Del</button>
+        </div></td>
+      </tr>
+    `).join('')}</tbody>`;
+}
+
+async function toggleFeedbackApproval(id, flag) {
+  const { ok, error } = await EyeApi.adminToggleFeedbackApproval(id, flag);
+  if (!ok) return showToast(error || 'Update failed');
+  showToast('Feedback updated');
+  renderFeedbackAdminTable();
+}
+
+async function toggleFeedbackHidden(id, flag) {
+  const { ok, error } = await EyeApi.adminToggleFeedbackHidden(id, flag);
+  if (!ok) return showToast(error || 'Update failed');
+  showToast('Feedback updated');
+  renderFeedbackAdminTable();
+}
+
+async function deleteFeedback(id) {
+  if (!confirm('Permanently delete this feedback?')) return;
+  const { ok, error } = await EyeApi.adminDeleteFeedback(id);
+  if (!ok) return showToast(error || 'Delete failed');
+  showToast('Feedback deleted');
+  renderFeedbackAdminTable();
+}
+
+async function openFeedbackModal(id) {
+  let f = { author_name: 'Admin', rating: 5, comment: '', is_approved: true };
+  if (id) {
+    const feedbacks = await EyeApi.fetchFeedbacksAdmin();
+    const found = feedbacks.find(x => x.id === id);
+    if (found) f = found;
+  }
+  const html = `
+    <form id="feedbackForm" onsubmit="saveAdminFeedback(event)">
+      <input type="hidden" name="id" value="${f.id || ''}">
+      <div class="form-field full"><label class="form-label">Author Name</label><input class="form-input" name="author_name" required value="${escapeHtml(f.author_name)}"></div>
+      <div class="form-field full"><label class="form-label">Rating (1-5)</label><input class="form-input" type="number" name="rating" min="1" max="5" required value="${f.rating}"></div>
+      <div class="form-field full"><label class="form-label">Comment</label><textarea class="form-textarea" name="comment" rows="3" required>${escapeHtml(f.comment)}</textarea></div>
+      <div class="form-field full"><label class="form-label">Image URL (optional)</label><input class="form-input" name="image_url" value="${escapeHtml(f.image_url || '')}"></div>
+      <div class="form-field full"><label class="form-label">Approved</label><select class="form-input" name="is_approved"><option value="true" ${f.is_approved ? 'selected' : ''}>Yes</option><option value="false" ${!f.is_approved ? 'selected' : ''}>No</option></select></div>
+      <button class="btn btn-gold" style="width:100%;margin-top:12px">${f.id ? 'Update' : 'Save'} Feedback</button>
+    </form>
+  `;
+  document.getElementById('modalTitle').textContent = f.id ? 'Edit Feedback' : 'Add Feedback';
+  document.getElementById('modalBody').innerHTML = html;
+  document.getElementById('modalOverlay').classList.add('open');
+}
+
+async function saveAdminFeedback(e) {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const data = {
+    id: fd.get('id') || null,
+    author_name: fd.get('author_name'),
+    rating: fd.get('rating'),
+    comment: fd.get('comment'),
+    image_url: fd.get('image_url') || null,
+    is_approved: fd.get('is_approved') === 'true'
+  };
+  const { ok, error } = await EyeApi.adminSaveFeedback(data);
+  if (!ok) return showToast(error || 'Failed to save');
+  showToast(data.id ? 'Feedback updated' : 'Feedback saved');
+  closeModal();
+  renderFeedbackAdminTable();
+}
+
+/* ── Activity Logs Admin ────────────────────────────────── */
+async function renderLogsTable(filter = 'all') {
+  const logs = await EyeApi.fetchLogs(200, filter);
+  document.getElementById('logsTable').innerHTML = `
+    <thead><tr><th>Action</th><th>Actor</th><th>Entity</th><th>ID</th><th>Timestamp</th><th>Details</th></tr></thead>
+    <tbody>${logs.map(l => {
+    const actorName = l.profiles?.full_name || l.actor_name || l.actor_id || 'System';
+    const actionClass = l.action.includes('INSERT') ? 'badge-green' : l.action.includes('UPDATE') ? 'badge-blue' : l.action.includes('DELETE') ? 'badge-red' : 'badge-gray';
+    return `
+      <tr>
+        <td><span class="badge ${actionClass}" style="text-transform:uppercase;font-size:10px">${escapeHtml(l.action)}</span></td>
+        <td style="font-size:13px;color:var(--white)">${escapeHtml(actorName)}</td>
+        <td style="font-size:11px;color:var(--gray-500);text-transform:capitalize">${escapeHtml(l.entity || '—')}</td>
+        <td style="font-size:11px;font-family:monospace;color:var(--gray-500)">${escapeHtml(l.entity_id || '—')}</td>
+        <td style="font-size:11px;color:var(--gray-500)">${new Date(l.created_at).toLocaleString()}</td>
+        <td style="font-size:12px;color:var(--white);max-width:250px;overflow:hidden;text-overflow:ellipsis" title="${escapeHtml(l.detail || '')}">${escapeHtml(l.detail || '—')}</td>
+      </tr>
+    `}).join('')}</tbody>`;
+}

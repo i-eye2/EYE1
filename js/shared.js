@@ -298,10 +298,15 @@ function renderNavbar(activePage, links, brandWordmark, isAdmin) {
     })
     .join('');
   const adminLi = isAdmin ? '<li><a href="admin.html">Admin</a></li>' : '';
-  const word = escapeHtml(brandWordmark || 'eye');
+  const word = "𝐄𝐘𝐄ᵀᴹ";
   return `
   <nav class="navbar" id="navbar">
-    <a href="index.html" class="nav-logo">${word}</a>
+    <div class="nav-left">
+      <button class="nav-icon menu-trigger" type="button" title="Menu" onclick="toggleSidebar(true)">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
+      <a href="index.html" class="nav-logo">${word}</a>
+    </div>
     <ul class="nav-links">
       ${lis}
       ${adminLi}
@@ -318,7 +323,63 @@ function renderNavbar(activePage, links, brandWordmark, isAdmin) {
         <span class="cart-badge">0</span>
       </button>
     </div>
-  </nav>`;
+  </nav>
+  ${renderMobileSidebar(activePage, isAdmin, word)}
+  `;
+}
+
+function renderMobileSidebar(activePage, isAdmin, brand) {
+  const links = [
+    { label: 'Home', href: 'index.html', icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>' },
+    { label: 'Shop', href: 'shop.html', icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>' },
+    { label: 'Contact', href: 'contact.html', icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>' },
+    { label: 'Feedback', href: 'feedbacks.html', icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>' },
+    { label: 'Policy', href: 'Return and Exchange Policy.html', icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>' },
+  ];
+  if (isAdmin) {
+    links.push({ label: 'Admin', href: 'admin.html', icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>' });
+  }
+
+  const itemsHtml = links.map(l => {
+    const active = linkActive(l, activePage) ? 'active' : '';
+    return `
+    <a href="${l.href}" class="sidebar-item ${active}">
+      <span class="sidebar-item-icon">${l.icon}</span>
+      <span class="sidebar-item-label">${l.label}</span>
+    </a>`;
+  }).join('');
+
+  return `
+  <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar(false)"></div>
+  <aside class="sidebar-panel" id="sidebarPanel">
+    <div class="sidebar-header">
+      <button class="sidebar-close" onclick="toggleSidebar(false)">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+      <div class="sidebar-title">${brand}</div>
+    </div>
+    <div class="sidebar-nav">
+      ${itemsHtml}
+    </div>
+    <div class="sidebar-footer">
+      <p>© ${new Date().getFullYear()} ${brand}</p>
+    </div>
+  </aside>`;
+}
+
+function toggleSidebar(open) {
+  const panel = document.getElementById('sidebarPanel');
+  const overlay = document.getElementById('sidebarOverlay');
+  if (!panel || !overlay) return;
+  if (open) {
+    panel.classList.add('open');
+    overlay.classList.add('open');
+    document.body.style.overflow = 'hidden';
+  } else {
+    panel.classList.remove('open');
+    overlay.classList.remove('open');
+    document.body.style.overflow = '';
+  }
 }
 
 function zoneTitle(zone, hp) {
@@ -360,15 +421,33 @@ function renderFooter(navRows, hp) {
       ${colsHtml}
     </div>
     <div class="footer-bottom">
-      <p>${copy}</p>
+      <div class="footer-bottom-inner">
+        <p>${copy}</p>
+        <a href="https://makeurwebsite.vercel.app" target="_blank" class="made-by-badge">
+          Made by <span>makeurwebsite</span>
+        </a>
+      </div>
     </div>
   </footer>`;
 }
 
 function renderBackendMissingBanner() {
-  return `<div class="navbar" style="justify-content:center;padding:20px;letter-spacing:.06em;font-size:13px;color:var(--gray-500)">
-    Supabase is not configured. Set <code style="color:var(--gold)">EYE_SUPABASE_URL</code> and <code style="color:var(--gold)">EYE_SUPABASE_ANON_KEY</code> in <strong>js/config.js</strong>, apply SQL in <strong>supabase/</strong>, then reload.
-  </div>`;
+
+  if (!sessionStorage.getItem("backend_refresh")) {
+
+    sessionStorage.setItem("backend_refresh", "true");
+
+    setTimeout(() => {
+      location.reload();
+    }, 2000);
+
+  }
+
+  return `
+    <div class="navbar" style="justify-content:center;padding:20px;">
+      Reconnecting...
+    </div>
+  `;
 }
 
 async function mountStandardShell(activePage) {
@@ -387,7 +466,7 @@ async function mountStandardShell(activePage) {
     EyeApi.fetchHomepageJson(),
     EyeApi.getSessionUser(),
   ]);
-  const isAdmin = !isMobile && session ? await EyeApi.isAdminUid(session.id) : false;
+  const isAdmin = session ? await EyeApi.isAdminUid(session.id) : false;
   const brand = hp?.brand?.wordmark || 'eye';
   if (navEl) navEl.innerHTML = renderNavbar(activePage, navRows, brand, isAdmin);
   if (footEl) footEl.innerHTML = renderFooter(navRows, hp);
@@ -421,8 +500,20 @@ function initNavbar() {
 function initLoader() {
   const loader = document.getElementById('pageLoader');
   if (!loader) return;
-  const isMobile = window.matchMedia('(max-width: 768px)').matches;
-  setTimeout(() => loader.classList.add('hidden'), isMobile ? 280 : 900);
+  const start = Date.now();
+  const hide = () => {
+    const elapsed = Date.now() - start;
+    const min = 1500; // Stay for at least 1.5s
+    const delay = Math.max(0, min - elapsed);
+    setTimeout(() => {
+      loader.classList.add('hidden');
+      setTimeout(() => { loader.style.display = 'none'; }, 800);
+    }, delay);
+  };
+  if (document.readyState === 'complete') hide();
+  else window.addEventListener('load', hide, { once: true });
+  // Fallback
+  setTimeout(hide, 4000);
 }
 
 async function injectMarquee() {
