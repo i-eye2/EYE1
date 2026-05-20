@@ -5,6 +5,30 @@ const EyeApi = (function () {
   let supabase = null;
   let ready = false;
 
+  // Optimized in-memory caches to reduce network calls
+  const settingsCache = {};
+  const dataCache = {};
+  const cacheTimes = {};
+
+  function getCached(key, maxAgeMs = 10000) {
+    const entry = dataCache[key];
+    const time = cacheTimes[key];
+    if (entry && time && (Date.now() - time < maxAgeMs)) {
+      return entry;
+    }
+    return null;
+  }
+
+  function setCached(key, value) {
+    dataCache[key] = value;
+    cacheTimes[key] = Date.now();
+  }
+
+  function invalidateCached(key) {
+    delete dataCache[key];
+    delete cacheTimes[key];
+  }
+
   function hasRemote() {
     return !!(window.EYE_SUPABASE_URL && window.EYE_SUPABASE_ANON_KEY);
   }
@@ -62,6 +86,32 @@ const EyeApi = (function () {
     const meta = sizeSpecs && typeof sizeSpecs.__meta === 'object' ? sizeSpecs.__meta : {};
     const comparePriceRaw = Number(meta.compare_price);
     const comparePrice = Number.isFinite(comparePriceRaw) && comparePriceRaw > price ? comparePriceRaw : null;
+    
+    // Dynamically calculate the total stock from size_stocks_json if sizes are present
+    const sizeStocks = parseProductJsonMap(row.size_stocks_json);
+    let calculatedStock = Number(row.stock);
+    if (sizeStocks && typeof sizeStocks === 'object' && Object.keys(sizeStocks).length > 0) {
+      let sum = 0;
+      let hasValidSizes = false;
+      const sizes = row.sizes || [];
+      if (sizes.length > 0) {
+        sizes.forEach(sz => {
+          if (sizeStocks[sz] !== undefined) {
+            sum += Math.max(0, Number(sizeStocks[sz]) || 0);
+            hasValidSizes = true;
+          }
+        });
+      } else {
+        Object.keys(sizeStocks).forEach(k => {
+          sum += Math.max(0, Number(sizeStocks[k]) || 0);
+          hasValidSizes = true;
+        });
+      }
+      if (hasValidSizes) {
+        calculatedStock = sum;
+      }
+    }
+
     return {
       id: row.id,
       name: row.name,
@@ -69,8 +119,8 @@ const EyeApi = (function () {
       price,
       category: row.category_id,
       sizes: row.sizes || [],
-      stock: row.stock,
-      sizeStocks: parseProductJsonMap(row.size_stocks_json),
+      stock: calculatedStock,
+      sizeStocks,
       sizeSpecs,
       comparePrice,
       badge: row.badge || null,
@@ -84,6 +134,8 @@ const EyeApi = (function () {
   }
 
   async function fetchProducts() {
+    const cached = getCached('products', 15000); // 15s cache
+    if (cached) return cached;
     await init();
     if (!supabase) return [];
     const { data: prows, error: e1 } = await supabase.from('products').select('*').order('created_at', { ascending: false });
@@ -100,10 +152,16 @@ const EyeApi = (function () {
         imgMap[row.product_id].push(row.url);
       });
     }
-    return (prows || []).map((row) => mapProductRow(row, imgMap[row.id] || []));
+    const result = (prows || []).map((row) => mapProductRow(row, imgMap[row.id] || []));
+    setCached('products', result);
+    return result;
   }
 
   async function fetchProductBySlugOrId({ slug, id }) {
+    // Slugs can be cached individually for high performance
+    const cacheKey = `product_${slug || id}`;
+    const cached = getCached(cacheKey, 15000);
+    if (cached) return cached;
     await init();
     if (!supabase) return null;
     let q = supabase.from('products').select('*').limit(1);
@@ -119,18 +177,26 @@ const EyeApi = (function () {
       .eq('product_id', row.id)
       .order('sort_order');
     const urls = (imgs || []).map((x) => x.url).filter(Boolean);
-    return mapProductRow(row, urls);
+    const result = mapProductRow(row, urls);
+    setCached(cacheKey, result);
+    return result;
   }
 
   async function fetchCategories() {
+    const cached = getCached('categories', 30000); // 30s cache
+    if (cached) return cached;
     await init();
     if (!supabase) return [];
     const { data, error } = await supabase.from('categories').select('*').order('sort_order');
     if (error) return [];
-    return data || [];
+    const result = data || [];
+    setCached('categories', result);
+    return result;
   }
 
   async function fetchAnnouncements() {
+    const cached = getCached('announcements', 30000); // 30s cache
+    if (cached) return cached;
     await init();
     if (!supabase) return [];
     const { data, error } = await supabase
@@ -139,7 +205,9 @@ const EyeApi = (function () {
       .eq('is_active', true)
       .order('sort_order', { ascending: true });
     if (error) return [];
-    return data || [];
+    const result = data || [];
+    setCached('announcements', result);
+    return result;
   }
 
   async function fetchAnnouncementsAdmin() {
@@ -163,6 +231,7 @@ const EyeApi = (function () {
       sort_order: Number(row.sort_order) || 0,
       is_active: row.is_active !== false,
     };
+    invalidateCached('announcements');
     if (row.id) {
       const { error } = await supabase.from('announcements').update(payload).eq('id', row.id);
       return error ? { ok: false, error } : { ok: true };
@@ -176,16 +245,21 @@ const EyeApi = (function () {
     if (!supabase) return { ok: false };
     const uid = (await supabase.auth.getSession()).data.session?.user?.id;
     if (!(await isAdminUid(uid))) return { ok: false };
+    invalidateCached('announcements');
     const { error } = await supabase.from('announcements').delete().eq('id', id);
     return error ? { ok: false, error } : { ok: true };
   }
 
   async function fetchNavigationLinks() {
+    const cached = getCached('navigation_links', 30000); // 30s cache
+    if (cached) return cached;
     await init();
     if (!supabase) return [];
     const { data, error } = await supabase.from('navigation_links').select('*').order('sort_order', { ascending: true });
     if (error) return [];
-    return data || [];
+    const result = data || [];
+    setCached('navigation_links', result);
+    return result;
   }
 
   async function adminUpsertNavigationLink(row) {
@@ -199,6 +273,7 @@ const EyeApi = (function () {
       href: row.href,
       sort_order: Number(row.sort_order) || 0,
     };
+    invalidateCached('navigation_links');
     if (row.id) {
       const { error } = await supabase.from('navigation_links').update(payload).eq('id', row.id);
       return error ? { ok: false, error } : { ok: true };
@@ -212,16 +287,22 @@ const EyeApi = (function () {
     if (!supabase) return { ok: false };
     const uid = (await supabase.auth.getSession()).data.session?.user?.id;
     if (!(await isAdminUid(uid))) return { ok: false };
+    invalidateCached('navigation_links');
     const { error } = await supabase.from('navigation_links').delete().eq('id', id);
     return error ? { ok: false, error } : { ok: true };
   }
 
   async function getSiteSetting(key) {
+    if (settingsCache[key] !== undefined) {
+      return settingsCache[key];
+    }
     await init();
     if (!supabase) return '';
     const { data, error } = await supabase.from('site_settings').select('value').eq('key', key).maybeSingle();
     if (error) return '';
-    return data?.value ?? '';
+    const val = data?.value ?? '';
+    settingsCache[key] = val;
+    return val;
   }
 
   async function fetchMarqueeText() {
@@ -240,6 +321,9 @@ const EyeApi = (function () {
     const { error } = await supabase
       .from('site_settings')
       .upsert({ key, value: String(value ?? ''), updated_at: new Date().toISOString() });
+    if (!error) {
+      settingsCache[key] = String(value ?? '');
+    }
     return error ? { ok: false, error } : { ok: true };
   }
 
@@ -265,12 +349,18 @@ const EyeApi = (function () {
 
   async function fetchPaymentWallets() {
     const raw = await getSiteSetting('payment_wallets_json');
-    if (!raw || !String(raw).trim()) return { telda: '', instapay: '', online: '' };
+    if (!raw || !String(raw).trim()) return { telda: '', instapay: '', online: '', offers: {}, locks: {} };
     try {
       const o = JSON.parse(raw);
-      return { telda: String(o.telda || ''), instapay: String(o.instapay || ''), online: String(o.online || '') };
+      return {
+        telda: String(o.telda || ''),
+        instapay: String(o.instapay || ''),
+        online: String(o.online || ''),
+        offers: o.offers || {},
+        locks: o.locks || {}
+      };
     } catch {
-      return { telda: '', instapay: '', online: '' };
+      return { telda: '', instapay: '', online: '', offers: {}, locks: {} };
     }
   }
 
@@ -522,6 +612,8 @@ const EyeApi = (function () {
   }
 
   async function fetchOrders() {
+    const cached = getCached('orders', 15000);
+    if (cached) return cached;
     await init();
     if (!supabase) return [];
     const { data: session } = await supabase.auth.getSession();
@@ -532,7 +624,9 @@ const EyeApi = (function () {
     if (!isAdm) q = q.eq('user_id', uid);
     const { data, error } = await q;
     if (error) return [];
-    return (data || []).map(mapOrderRow);
+    const result = (data || []).map(mapOrderRow);
+    setCached('orders', result);
+    return result;
   }
 
   async function adminDeleteOrder(id) {
@@ -541,13 +635,14 @@ const EyeApi = (function () {
     const { data: session } = await supabase.auth.getSession();
     const uid = session?.session?.user?.id;
     if (!uid || !(await isAdminUid(uid))) return { ok: false, error: 'Not admin' };
-    
+
     // First, verify if the order exists to prevent unneeded logs
     const { data: existing, error: fetchErr } = await supabase.from('orders').select('id').eq('id', id).maybeSingle();
     if (!existing || fetchErr) return { ok: false, error: 'Order not found' };
 
     const { error } = await supabase.from('orders').delete().eq('id', id);
     if (error) return { ok: false, error: error.message };
+    invalidateCached('orders');
     writeLog('DELETE', 'order', String(id), 'Admin deleted order');
     return { ok: true };
   }
@@ -588,17 +683,23 @@ const EyeApi = (function () {
     };
   }
 
+  const adminUidCache = {};
   async function isAdminUid(uid) {
     if (!supabase || !uid) return false;
+    if (adminUidCache[uid] !== undefined) return adminUidCache[uid];
     const { data, error } = await supabase.from('profiles').select('role').eq('id', uid).maybeSingle();
     if (error) {
       console.warn('EYE: isAdminUid', error.message || error);
       return false;
     }
-    return normalizeDbRole(data?.role) === 'admin';
+    const isAdm = normalizeDbRole(data?.role) === 'admin';
+    adminUidCache[uid] = isAdm;
+    return isAdm;
   }
 
   async function fetchUsers() {
+    const cached = getCached('users', 30000);
+    if (cached) return cached;
     await init();
     if (!supabase) return [];
     const { data: session } = await supabase.auth.getSession();
@@ -606,7 +707,7 @@ const EyeApi = (function () {
     if (!(await isAdminUid(uid))) return [];
     const { data, error } = await supabase.from('profiles').select('*');
     if (error) return [];
-    return (data || []).map((p) => ({
+    const result = (data || []).map((p) => ({
       id: p.id,
       name: p.full_name || 'User',
       email: p.email || '',
@@ -616,9 +717,13 @@ const EyeApi = (function () {
       phone: p.phone,
       address: p.address,
     }));
+    setCached('users', result);
+    return result;
   }
 
   async function fetchExpenses() {
+    const cached = getCached('expenses', 30000);
+    if (cached) return cached;
     await init();
     if (!supabase) return [];
     const { data: session } = await supabase.auth.getSession();
@@ -626,13 +731,15 @@ const EyeApi = (function () {
     if (!uid || !(await isAdminUid(uid))) return [];
     const { data, error } = await supabase.from('expenses').select('*').order('expense_date', { ascending: false });
     if (error) return [];
-    return (data || []).map((e) => ({
+    const result = (data || []).map((e) => ({
       id: e.id,
       category: e.category,
       label: e.label,
       amount: Number(e.amount),
       date: e.expense_date,
     }));
+    setCached('expenses', result);
+    return result;
   }
 
   async function saveOrder(orderPayload) {
@@ -650,10 +757,10 @@ const EyeApi = (function () {
       }
     }
     if (!uid) return { ok: false, error: 'Could not create guest session' };
-    
+
     // 5 random digits for Order ID
     const oid = 'EYE-' + String(Math.floor(10000 + Math.random() * 90000));
-    
+
     const row = {
       id: oid,
       user_id: uid,
@@ -672,6 +779,7 @@ const EyeApi = (function () {
     };
     const { error } = await supabase.from('orders').insert(row);
     if (error) return { ok: false, error };
+    invalidateCached('orders');
     if (orderPayload.coupon_code) {
       const { error: rpcErr } = await supabase.rpc('increment_coupon_usage', { p_code: orderPayload.coupon_code });
       if (rpcErr) console.warn('EYE: increment_coupon_usage', rpcErr);
@@ -682,7 +790,7 @@ const EyeApi = (function () {
       items.map((it) => decrementSizeStock(it.productId, it.size, it.qty || 1))
     );
     // Write activity log (fire-and-forget)
-    writeLog('order.created', 'order', oid, `${orderPayload.payment_method} — EGP ${orderPayload.total}`).catch(() => {});
+    writeLog('order.created', 'order', oid, `${orderPayload.payment_method} — EGP ${orderPayload.total}`).catch(() => { });
     return { ok: true, orderId: oid, userId: uid };
   }
 
@@ -692,7 +800,7 @@ const EyeApi = (function () {
     try {
       if (!orderId || !userId) return;
       localStorage.setItem(PENDING_ORDER_CLAIM_KEY, JSON.stringify({ orderId, userId, t: Date.now() }));
-    } catch (_) {}
+    } catch (_) { }
   }
 
   /** After real sign-in (non-anonymous), attach last guest order if email matches order address. */
@@ -712,7 +820,7 @@ const EyeApi = (function () {
     } catch {
       try {
         localStorage.removeItem(PENDING_ORDER_CLAIM_KEY);
-      } catch (_) {}
+      } catch (_) { }
       return { claimed: false, skipped: true };
     }
     const orderId = payload.orderId;
@@ -720,7 +828,7 @@ const EyeApi = (function () {
     if (!orderId || !fromUid) {
       try {
         localStorage.removeItem(PENDING_ORDER_CLAIM_KEY);
-      } catch (_) {}
+      } catch (_) { }
       return { claimed: false, skipped: true };
     }
     const { data: session } = await supabase.auth.getSession();
@@ -738,12 +846,12 @@ const EyeApi = (function () {
     if (claimed === true) {
       try {
         localStorage.removeItem(PENDING_ORDER_CLAIM_KEY);
-      } catch (_) {}
+      } catch (_) { }
       return { claimed: true };
     }
     try {
       localStorage.removeItem(PENDING_ORDER_CLAIM_KEY);
-    } catch (_) {}
+    } catch (_) { }
     return { claimed: false, mismatch: true };
   }
 
@@ -927,18 +1035,35 @@ const EyeApi = (function () {
       });
       if (!error) return { ok: true };
       console.warn('EYE: decrement_size_stock RPC:', error.message);
-    } catch (_) {}
+    } catch (_) { }
     // Fallback: optimistic read-modify-write
     const { data: row, error: fetchErr } = await supabase
       .from('products')
-      .select('size_stocks_json, stock')
+      .select('size_stocks_json, stock, sizes')
       .eq('id', productId)
       .single();
     if (fetchErr || !row) return { ok: false, error: fetchErr };
     const stocks = { ...(row.size_stocks_json && typeof row.size_stocks_json === 'object' ? row.size_stocks_json : {}) };
     const cur = Math.max(0, Number(stocks[size] != null ? stocks[size] : (row.stock ?? 0)));
     stocks[size] = Math.max(0, cur - qtyN);
-    const { error: upErr } = await supabase.from('products').update({ size_stocks_json: stocks }).eq('id', productId);
+    
+    // Calculate new total stock
+    let calculatedStock = 0;
+    const sizes = Array.isArray(row.sizes) ? row.sizes : [];
+    if (sizes.length > 0) {
+      sizes.forEach(sz => {
+        calculatedStock += Math.max(0, Number(stocks[sz]) || 0);
+      });
+    } else {
+      Object.keys(stocks).forEach(k => {
+        calculatedStock += Math.max(0, Number(stocks[k]) || 0);
+      });
+    }
+
+    const { error: upErr } = await supabase.from('products').update({ 
+      size_stocks_json: stocks, 
+      stock: calculatedStock 
+    }).eq('id', productId);
     return upErr ? { ok: false, error: upErr } : { ok: true };
   }
 
@@ -946,7 +1071,7 @@ const EyeApi = (function () {
   async function uploadOrderProofBlob(blob, contentType) {
     await init();
     if (!supabase) return { ok: false, error: 'Offline' };
-    
+
     // Allow guests (uid can be null)
     let { data: session } = await supabase.auth.getSession();
     let uid = session?.session?.user?.id;
@@ -962,10 +1087,10 @@ const EyeApi = (function () {
     const ct = contentType || blob.type || 'image/jpeg';
     const ext = ct.includes('png') ? 'png' : ct.includes('webp') ? 'webp' : 'jpg';
     const path = `${uid}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-    
+
     const { error } = await supabase.storage.from('order-proofs').upload(path, blob, { contentType: ct, upsert: false });
     if (error) return { ok: false, error: error.message || error };
-    
+
     const { data: pub } = supabase.storage.from('order-proofs').getPublicUrl(path);
     return { ok: true, url: pub.publicUrl, path };
   }
@@ -1103,7 +1228,7 @@ const EyeApi = (function () {
         entity_id: entityId ? String(entityId) : null,
         detail: detail || null,
       });
-    } catch (_) {}
+    } catch (_) { }
   }
 
   async function fetchLogs(limit = 200, filter = '') {
@@ -1122,18 +1247,18 @@ const EyeApi = (function () {
   async function saveAnalyticsEvent(event) {
     await init();
     if (!supabase) return { ok: false };
-    
+
     const { data: session } = await supabase.auth.getSession();
     const uid = session?.session?.user?.id;
     if (uid && (await isAdminUid(uid))) return { ok: true }; // Skip admin
 
     const row = {
-      event_type:   String(event.event_type || 'page_view'),
-      product_id:   event.product_id  || null,
+      event_type: String(event.event_type || 'page_view'),
+      product_id: event.product_id || null,
       product_name: event.product_name || null,
-      session_id:   event.session_id  || null,
+      session_id: event.session_id || null,
       duration_sec: event.duration_sec != null ? Math.floor(Number(event.duration_sec)) : null,
-      page:         event.page || null,
+      page: event.page || null,
     };
     const { error } = await supabase.from('analytics_events').insert(row);
     if (error) console.warn('EYE Analytics save:', error.message);
@@ -1146,8 +1271,8 @@ const EyeApi = (function () {
     const uid = (await supabase.auth.getSession()).data.session?.user?.id;
     if (!(await isAdminUid(uid))) return null;
 
-    const fiveMinAgo  = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-    const todayStart  = new Date(); todayStart.setHours(0, 0, 0, 0);
+    const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
 
     const [liveRes, viewsRes, durRes, todayRes] = await Promise.all([
       supabase.from('analytics_events').select('session_id').gte('created_at', fiveMinAgo),
@@ -1156,14 +1281,14 @@ const EyeApi = (function () {
       supabase.from('analytics_events').select('session_id').eq('event_type', 'page_view').gte('created_at', todayStart.toISOString()),
     ]);
 
-    const liveVisitors  = new Set((liveRes.data  || []).map((r) => r.session_id)).size;
-    const todayVisitors = new Set((todayRes.data  || []).map((r) => r.session_id)).size;
+    const liveVisitors = new Set((liveRes.data || []).map((r) => r.session_id)).size;
+    const todayVisitors = new Set((todayRes.data || []).map((r) => r.session_id)).size;
 
     const viewCounts = {}; const viewNames = {};
     (viewsRes.data || []).forEach((r) => {
       if (!r.product_id) return;
       viewCounts[r.product_id] = (viewCounts[r.product_id] || 0) + 1;
-      viewNames[r.product_id]  = r.product_name || r.product_id;
+      viewNames[r.product_id] = r.product_name || r.product_id;
     });
     const durTotals = {}; const durCounts = {};
     (durRes.data || []).forEach((r) => {
@@ -1189,14 +1314,14 @@ const EyeApi = (function () {
     const uid = session?.session?.user?.id;
     if (!uid || !(await isAdminUid(uid))) return { ok: false, error: 'Not admin' };
 
-    const todayStart = new Date(); 
+    const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
     const { error } = await supabase
       .from('analytics_events')
       .delete()
       .gte('created_at', todayStart.toISOString());
-      
+
     if (error) return { ok: false, error: error.message };
     writeLog('DELETE', 'analytics', 'today', 'Admin cleared today analytics');
     return { ok: true };

@@ -226,8 +226,11 @@ function removeItem(key) {
 
 async function applyCoupon() {
   const code = document.getElementById('couponInput').value.trim().toUpperCase();
-  const coupons = (await EyeApi.fetchCoupons()) || __couponsCache;
-  __couponsCache = coupons;
+  let coupons = __couponsCache;
+  if (!coupons || !coupons.length) {
+    coupons = await EyeApi.fetchCoupons();
+    __couponsCache = coupons || [];
+  }
   const coupon = coupons.find((c) => c.code === code);
   const msg = document.getElementById('couponMsg');
   if (!coupon) {
@@ -274,14 +277,32 @@ function computeTotals() {
 
 function computeCheckoutModalTotals() {
   const subtotal = Cart.total();
-  const discount = appliedCoupon
+  let couponDiscount = appliedCoupon
     ? appliedCoupon.type === 'percent'
       ? Math.round((subtotal * appliedCoupon.value) / 100)
       : appliedCoupon.value
     : 0;
+
+  let payDiscount = 0;
+  const payMethodEl = document.getElementById('chkPayMethod');
+  const payMethod = payMethodEl ? payMethodEl.value : '';
+  if (payMethod && __checkoutWallets && __checkoutWallets.offers) {
+    let offerKey = payMethod;
+    if (payMethod === 'Cash on Delivery') offerKey = 'COD';
+    const offer = __checkoutWallets.offers[offerKey];
+    if (offer && offer.type && offer.type !== 'none' && offer.value > 0) {
+      if (offer.type === 'percentage') {
+        payDiscount = Math.round((subtotal * offer.value) / 100);
+      } else if (offer.type === 'fixed') {
+        payDiscount = Number(offer.value) || 0;
+      }
+    }
+  }
+
   const shipping = subtotal >= __shipFree ? 0 : __checkoutShipEgp;
-  const total = subtotal - discount + shipping;
-  return { subtotal, discount, shipping, total };
+  const discount = couponDiscount + payDiscount;
+  const total = Math.max(0, subtotal - discount + shipping);
+  return { subtotal, discount, couponDiscount, payDiscount, shipping, total };
 }
 
 function syncCheckoutShipFromSelection() {
@@ -375,13 +396,30 @@ function refreshCheckoutTotalsDisplay() {
       }
     }
   }
-  if (discWrap && discAmt && discLbl) {
-    if (t.discount > 0 && appliedCoupon) {
-      discWrap.style.display = '';
-      discLbl.textContent = `Discount (${appliedCoupon.code})`;
-      discAmt.textContent = `−${formatPrice(t.discount)}`;
+  const couponDiscWrap = document.getElementById('chkCouponDiscWrap');
+  const couponDiscAmt = document.getElementById('chkCouponDiscDisplay');
+  const couponDiscLbl = document.getElementById('chkCouponDiscLabel');
+  if (couponDiscWrap && couponDiscAmt && couponDiscLbl) {
+    if (t.couponDiscount > 0 && appliedCoupon) {
+      couponDiscWrap.style.display = '';
+      couponDiscLbl.textContent = `Coupon (${appliedCoupon.code})`;
+      couponDiscAmt.textContent = `−${formatPrice(t.couponDiscount)}`;
     } else {
-      discWrap.style.display = 'none';
+      couponDiscWrap.style.display = 'none';
+    }
+  }
+
+  const payDiscWrap = document.getElementById('chkPayDiscWrap');
+  const payDiscAmt = document.getElementById('chkPayDiscDisplay');
+  const payDiscLbl = document.getElementById('chkPayDiscLabel');
+  if (payDiscWrap && payDiscAmt && payDiscLbl) {
+    if (t.payDiscount > 0) {
+      payDiscWrap.style.display = '';
+      const pay = document.getElementById('chkPayMethod')?.value || '';
+      payDiscLbl.textContent = `${pay} Offer`;
+      payDiscAmt.textContent = `−${formatPrice(t.payDiscount)}`;
+    } else {
+      payDiscWrap.style.display = 'none';
     }
   }
 }
@@ -413,6 +451,44 @@ async function openCheckoutModal() {
   } else {
     __checkoutShipEgp = Number(__checkoutZonesCfg.defaultShippingEgp) || 150;
   }
+
+  const offers = wallets.offers || {};
+  const locks = wallets.locks || {};
+  const subtotal = Cart.total();
+
+  function getOfferText(key) {
+    const offer = offers[key];
+    if (offer && offer.type && offer.type !== 'none' && offer.value > 0) {
+      if (offer.type === 'percentage') {
+        return ` (${offer.value}% Off)`;
+      } else if (offer.type === 'fixed') {
+        return ` (EGP ${offer.value} Off)`;
+      }
+    }
+    return '';
+  }
+
+  function getPaymentOptionHtml(key, icon, label) {
+    const lockLimit = Number(locks[key]) || 0;
+    if (lockLimit > 0 && subtotal > lockLimit) {
+      return `
+        <div class="custom-option disabled" data-value="${key}" style="opacity:0.45;pointer-events:none">
+          <span>${icon} ${label}</span>
+          <span class="option-right" style="color:#ff4d4d;font-size:12px;font-weight:600">🔒 Locked</span>
+        </div>`;
+    }
+    const offerText = getOfferText(key);
+    return `
+      <div class="custom-option" data-value="${key}">
+        <span>${icon} ${label}</span>
+        <span class="option-right">${offerText || ''}</span>
+      </div>`;
+  }
+
+  const instapayOptionHtml = getPaymentOptionHtml('InstaPay', '💸', 'InstaPay');
+  const teldaOptionHtml = getPaymentOptionHtml('Telda', '💳', 'Telda');
+  const onlineOptionHtml = getPaymentOptionHtml('Online Wallet', '📱', 'Online Wallet');
+  const codOptionHtml = getPaymentOptionHtml('COD', '📦', 'Cash on Delivery (COD)');
 
   const chkTitle = escapeHtml(__cartUi.checkoutTitle || 'Checkout');
   const chkLead = escapeHtml(__cartUi.checkoutLead || '');
@@ -470,14 +546,27 @@ async function openCheckoutModal() {
         ${contactBlock}
         ${govBlock}
         <div class="form-row">
-          <label for="chkPayMethod">Payment Method *</label>
-          <select id="chkPayMethod" class="payment-select" required>
-            <option value="">— Select payment method —</option>
-            <option value="InstaPay">💸 InstaPay</option>
-            <option value="Telda">💳 Telda</option>
-            <option value="Online Wallet">📱 Online Wallet</option>
-            <option value="Cash on Delivery">📦 Cash on Delivery (COD)</option>
-          </select>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <label style="margin:0">Payment Method *</label>
+            <span id="chkPayMethodOffer" style="color:var(--gold);font-size:11.5px;font-weight:600;display:none;letter-spacing:0.02em"></span>
+          </div>
+          
+          <div class="custom-select-wrapper" id="customPaySelect">
+            <div class="custom-select-trigger">
+              <span id="customPayTriggerText">— Select payment method —</span>
+              <div class="arrow"></div>
+            </div>
+            <div class="custom-options">
+              <div class="custom-option" data-value="">— Select payment method —</div>
+              ${instapayOptionHtml}
+              ${teldaOptionHtml}
+              ${onlineOptionHtml}
+              ${codOptionHtml}
+            </div>
+            <input type="hidden" id="chkPayMethod" value="" />
+          </div>
+          
+          <div id="chkPaymentPromo" style="color:var(--gold);font-size:11px;font-weight:500;margin-top:6px;text-align:right;display:none;letter-spacing:0.02em"></div>
         </div>
         <div id="chkWalletBox" class="checkout-wallet-box" style="display:none">
           <div class="checkout-wallet-label">Send payment to</div>
@@ -493,7 +582,8 @@ async function openCheckoutModal() {
         </div>
         <div class="checkout-order-totals">
           <div class="summary-row"><span>Subtotal</span><span id="chkSubDisplay" style="font-family:var(--font-serif)"></span></div>
-          <div id="chkDiscWrap" class="summary-row" style="display:none;color:#8fd9a8;justify-content:space-between;width:100%"><span id="chkDiscLabel"></span><span id="chkDiscDisplay" style="font-family:var(--font-serif)"></span></div>
+          <div id="chkCouponDiscWrap" class="summary-row" style="display:none;color:#8fd9a8;justify-content:space-between;width:100%"><span id="chkCouponDiscLabel"></span><span id="chkCouponDiscDisplay" style="font-family:var(--font-serif)"></span></div>
+          <div id="chkPayDiscWrap" class="summary-row" style="display:none;color:#8fd9a8;justify-content:space-between;width:100%"><span id="chkPayDiscLabel"></span><span id="chkPayDiscDisplay" style="font-family:var(--font-serif)"></span></div>
           <div class="summary-row chk-ship-main"><span>Shipping</span><div class="chk-ship-value-col"><span id="chkShipDisplay" style="font-family:var(--font-serif)"></span><div id="chkShipSub" class="checkout-ship-sub"></div></div></div>
           <div class="summary-delivery-note" id="chkDeliveryEstimate" style="margin-top:-10px;margin-bottom:16px"></div>
           <div class="summary-divider"></div>
@@ -536,14 +626,103 @@ async function openCheckoutModal() {
     if (ge && !ge.value) ge.value = sessionUser.email;
   }
 
-  // Payment proof upload wiring
   const payMethodEl = document.getElementById('chkPayMethod');
+
+  // Custom Select Dropdown wiring
+  const customSelect = document.getElementById('customPaySelect');
+  const customTrigger = customSelect?.querySelector('.custom-select-trigger');
+  const customTriggerText = document.getElementById('customPayTriggerText');
+  const customOptions = customSelect?.querySelectorAll('.custom-option');
+  
+  if (customSelect && customTrigger) {
+    customTrigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      customSelect.classList.toggle('open');
+    });
+    
+    document.addEventListener('click', () => {
+      customSelect.classList.remove('open');
+    });
+    
+    customOptions.forEach(opt => {
+      opt.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const val = opt.getAttribute('data-value');
+        if (payMethodEl) {
+          payMethodEl.value = val;
+        }
+        
+        const leftSpan = opt.querySelector('span:not(.option-right)');
+        const rightSpan = opt.querySelector('.option-right');
+        if (val) {
+          customTriggerText.innerHTML = `
+            <span style="display:flex;justify-content:space-between;width:100%;align-items:center;padding-right:8px">
+              <span>${leftSpan ? leftSpan.textContent : opt.textContent}</span>
+              <span style="color:var(--gold);font-weight:500;font-size:13px">${rightSpan && rightSpan.textContent ? rightSpan.textContent : ''}</span>
+            </span>`;
+        } else {
+          customTriggerText.textContent = '— Select payment method —';
+        }
+        
+        customSelect.classList.remove('open');
+        if (payMethodEl) {
+          payMethodEl.dispatchEvent(new Event('change'));
+        }
+      });
+    });
+  }
+
+  // Payment proof upload wiring
   payMethodEl?.addEventListener('change', () => {
     refreshCheckoutPaymentHint();
-    const proofBox = document.getElementById('chkProofBox');
+    refreshCheckoutTotalsDisplay();
+
+    // Show/hide the specific red offer label next to the select input title
     const pay = payMethodEl.value;
+    let offerKey = pay;
+    if (pay === 'Cash on Delivery') offerKey = 'COD';
+    const offer = offers[offerKey];
+    const offerLabelEl = document.getElementById('chkPayMethodOffer');
+    if (offerLabelEl) {
+      if (offer && offer.type && offer.type !== 'none' && offer.value > 0) {
+        if (offer.type === 'percentage') {
+          offerLabelEl.textContent = `(${offer.value}% Off)`;
+        } else {
+          offerLabelEl.textContent = `(EGP ${offer.value} Off)`;
+        }
+        offerLabelEl.style.display = 'inline';
+      } else {
+        offerLabelEl.style.display = 'none';
+        offerLabelEl.textContent = '';
+      }
+    }
+
+    const proofBox = document.getElementById('chkProofBox');
     if (proofBox) proofBox.style.display = (pay === 'InstaPay' || pay === 'Telda' || pay === 'Online Wallet') ? 'block' : 'none';
   });
+
+  // Populate overall promo alerts under the select element
+  const promoEl = document.getElementById('chkPaymentPromo');
+  if (promoEl) {
+    const activePromos = [];
+    for (const [key, offer] of Object.entries(offers)) {
+      if (offer && offer.type && offer.type !== 'none' && offer.value > 0) {
+        const displayName = key === 'COD' ? 'COD' : key;
+        if (offer.type === 'percentage') {
+          activePromos.push(`${displayName}: ${offer.value}% off`);
+        } else {
+          activePromos.push(`${displayName}: EGP ${offer.value} off`);
+        }
+      }
+    }
+    if (activePromos.length > 0) {
+      promoEl.textContent = `Active Promos: ${activePromos.join(' | ')}`;
+      promoEl.style.display = 'block';
+    } else {
+      promoEl.style.display = 'none';
+    }
+  }
+
   document.getElementById('chkProofFile')?.addEventListener('change', (e) => {
     const file = e.target.files?.[0];
     const preview = document.getElementById('chkProofPreview');

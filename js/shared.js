@@ -489,8 +489,15 @@ async function mountStandardShell(activePage) {
 function initNavbar() {
   const nav = document.querySelector('.navbar');
   if (!nav) return;
+  let ticking = false;
   const onScroll = () => {
-    nav.classList.toggle('scrolled', window.scrollY > 20);
+    if (!ticking) {
+      window.requestAnimationFrame(() => {
+        nav.classList.toggle('scrolled', window.scrollY > 20);
+        ticking = false;
+      });
+      ticking = true;
+    }
   };
   window.addEventListener('scroll', onScroll, { passive: true });
   onScroll();
@@ -556,7 +563,3 @@ async function injectMarquee() {
   document.body.insertBefore(bar, document.body.firstChild);
   document.body.classList.add('has-marquee');
 }
-
-document.addEventListener('DOMContentLoaded', () => {
-  Cart.updateBadge();
-});

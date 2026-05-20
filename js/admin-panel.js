@@ -10,7 +10,10 @@ function showPage(name, el) {
   document.querySelectorAll('.admin-page').forEach((p) => p.classList.remove('active'));
   document.querySelectorAll('.admin-nav-item').forEach((i) => i.classList.remove('active'));
   document.getElementById('page-' + name)?.classList.add('active');
-  el.classList.add('active');
+  if (el) el.classList.add('active');
+  try {
+    sessionStorage.setItem('admin_active_tab', name);
+  } catch (_) {}
   if (name === 'dashboard') initDashboard();
   if (name === 'products') renderProductsTable();
   if (name === 'orders') renderOrdersTable('all');
@@ -20,7 +23,7 @@ function showPage(name, el) {
   if (name === 'shipping') initShippingPage();
   if (name === 'analytics') initAnalytics();
   if (name === 'contact-admin') initContactAdmin();
-  if (name === 'settings') initSettings();
+  if (name === 'settings' || name === 'payments') initSettings();
   if (name === 'feedback') renderFeedbackAdminTable();
   if (name === 'logs') renderLogsTable();
 }
@@ -180,10 +183,16 @@ function capturePerSizeDraftFromDom() {
     const sz = row.getAttribute('data-ps-size');
     if (idx == null || !sz) return;
     const q = document.getElementById(`psq-${idx}`);
-    const kg = document.getElementById(`pskg-${idx}`);
+    const minH = document.getElementById(`psminh-${idx}`);
+    const maxH = document.getElementById(`psmaxh-${idx}`);
+    const minW = document.getElementById(`psminw-${idx}`);
+    const maxW = document.getElementById(`psmaxw-${idx}`);
     if (q) stocks[sz] = Number(q.value) || 0;
     specs[sz] = {
-      weight_kg: kg && kg.value.trim() ? kg.value.trim() : '',
+      min_height: minH && minH.value.trim() !== '' ? Number(minH.value) : null,
+      max_height: maxH && maxH.value.trim() !== '' ? Number(maxH.value) : null,
+      min_weight: minW && minW.value.trim() !== '' ? Number(minW.value) : null,
+      max_weight: maxW && maxW.value.trim() !== '' ? Number(maxW.value) : null,
     };
   });
   return { stocks, specs };
@@ -199,20 +208,26 @@ function renderProductPerSizeInputs(p) {
   const baseSpecs = { ...((p && p.sizeSpecs) || {}), ...draft.specs };
   if (!sizes.length) {
     mount.innerHTML =
-      '<label class="form-label">Per-size stock &amp; weight</label><p style="font-size:11px;color:var(--gray-500);line-height:1.5">Add sizes above, then tab out to set stock and optional weight (kg) per size. If per-size stock is empty, the main Stock field is used for all sizes.</p>';
+      '<label class="form-label">Per-size stock &amp; size fitting guide</label><p style="font-size:11px;color:var(--gray-500);line-height:1.5">Add sizes above, then tab out to set stock and size guides (height in cm, weight in kg) per size.</p>';
     return;
   }
-  mount.innerHTML = `<label class="form-label">Per-size stock &amp; weight (kg)</label>
+  mount.innerHTML = `<label class="form-label">Per-size stock &amp; size fitting guide</label>
     <div class="admin-per-size-wrap">${sizes
       .map((s, i) => {
         const st = baseStocks[s] != null && baseStocks[s] !== '' ? Number(baseStocks[s]) : '';
         const sp = baseSpecs[s] || {};
-        const kg = sp.weight_kg != null ? escapeHtml(String(sp.weight_kg)) : '';
+        const minH = sp.min_height != null ? sp.min_height : '';
+        const maxH = sp.max_height != null ? sp.max_height : '';
+        const minW = sp.min_weight != null ? sp.min_weight : '';
+        const maxW = sp.max_weight != null ? sp.max_weight : '';
         return `<div class="admin-per-size-row" data-ps-idx="${i}" data-ps-size="${escapeHtml(s)}">
           <div class="admin-per-size-label">${escapeHtml(s)}</div>
-          <div class="admin-per-size-fields">
-            <div class="form-field" style="min-width:0"><label class="form-label">Stock</label><input class="form-input" id="psq-${i}" type="number" min="0" step="1" value="${st === '' ? '' : escapeHtml(String(st))}" placeholder="Qty" /></div>
-            <div class="form-field" style="min-width:0"><label class="form-label">Weight</label><input class="form-input" id="pskg-${i}" type="text" value="${kg}" placeholder="kg" /></div>
+          <div class="admin-per-size-fields" style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;width:100%">
+            <div class="form-field" style="min-width:0;margin:0"><label class="form-label" style="font-size:9px">Stock</label><input class="form-input" id="psq-${i}" type="number" min="0" step="1" value="${st === '' ? '' : escapeHtml(String(st))}" placeholder="Qty" /></div>
+            <div class="form-field" style="min-width:0;margin:0"><label class="form-label" style="font-size:9px">Min H (cm)</label><input class="form-input" id="psminh-${i}" type="number" value="${minH}" placeholder="cm" /></div>
+            <div class="form-field" style="min-width:0;margin:0"><label class="form-label" style="font-size:9px">Max H (cm)</label><input class="form-input" id="psmaxh-${i}" type="number" value="${maxH}" placeholder="cm" /></div>
+            <div class="form-field" style="min-width:0;margin:0"><label class="form-label" style="font-size:9px">Min W (kg)</label><input class="form-input" id="psminw-${i}" type="number" value="${minW}" placeholder="kg" /></div>
+            <div class="form-field" style="min-width:0;margin:0"><label class="form-label" style="font-size:9px">Max W (kg)</label><input class="form-input" id="psmaxw-${i}" type="number" value="${maxW}" placeholder="kg" /></div>
           </div>
         </div>`;
       })
@@ -407,10 +422,18 @@ async function saveProduct() {
   const sizeSpecs = {};
   sizes.forEach((sz, i) => {
     const q = document.getElementById(`psq-${i}`);
-    const kg = document.getElementById(`pskg-${i}`);
+    const minH = document.getElementById(`psminh-${i}`);
+    const maxH = document.getElementById(`psmaxh-${i}`);
+    const minW = document.getElementById(`psminw-${i}`);
+    const maxW = document.getElementById(`psmaxw-${i}`);
     if (q && q.value.trim() !== '') sizeStocks[sz] = Math.max(0, Math.floor(Number(q.value) || 0));
-    const w = kg && kg.value.trim();
-    if (w) sizeSpecs[sz] = { weight_kg: w };
+
+    sizeSpecs[sz] = {
+      min_height: minH && minH.value.trim() !== '' ? Number(minH.value) : null,
+      max_height: maxH && maxH.value.trim() !== '' ? Number(maxH.value) : null,
+      min_weight: minW && minW.value.trim() !== '' ? Number(minW.value) : null,
+      max_weight: maxW && maxW.value.trim() !== '' ? Number(maxW.value) : null,
+    };
   });
   const oldPriceRaw = Number(document.getElementById('pOldPrice')?.value);
   const livePrice = Number(document.getElementById('pPrice').value);
@@ -1506,6 +1529,38 @@ async function initSettings() {
   if (wt) wt.value = w.telda || '';
   if (wi) wi.value = w.instapay || '';
   if (wo) wo.value = w.online || '';
+
+  const offers = w.offers || {};
+  const locks = w.locks || {};
+
+  const teldaType = document.getElementById('teldaDiscType');
+  const teldaVal = document.getElementById('teldaDiscValue');
+  const teldaMax = document.getElementById('teldaMaxLimit');
+  if (teldaType) teldaType.value = offers['Telda']?.type || 'none';
+  if (teldaVal) teldaVal.value = offers['Telda']?.value || '';
+  if (teldaMax) teldaMax.value = locks['Telda'] || '';
+
+  const instaType = document.getElementById('instaDiscType');
+  const instaVal = document.getElementById('instaDiscValue');
+  const instaMax = document.getElementById('instaMaxLimit');
+  if (instaType) instaType.value = offers['InstaPay']?.type || 'none';
+  if (instaVal) instaVal.value = offers['InstaPay']?.value || '';
+  if (instaMax) instaMax.value = locks['InstaPay'] || '';
+
+  const onlineType = document.getElementById('onlineDiscType');
+  const onlineVal = document.getElementById('onlineDiscValue');
+  const onlineMax = document.getElementById('onlineMaxLimit');
+  if (onlineType) onlineType.value = offers['Online Wallet']?.type || 'none';
+  if (onlineVal) onlineVal.value = offers['Online Wallet']?.value || '';
+  if (onlineMax) onlineMax.value = locks['Online Wallet'] || '';
+
+  const codType = document.getElementById('codDiscType');
+  const codVal = document.getElementById('codDiscValue');
+  const codMax = document.getElementById('codMaxLimit');
+  if (codType) codType.value = offers['COD']?.type || 'none';
+  if (codVal) codVal.value = offers['COD']?.value || '';
+  if (codMax) codMax.value = locks['COD'] || '';
+
   await renderAnnouncementsAdmin();
   await renderNavAdmin();
   await renderCategoriesAdmin();
@@ -1597,11 +1652,38 @@ async function savePaymentWallets() {
   const telda = document.getElementById('walletTelda')?.value.trim() || '';
   const instapay = document.getElementById('walletInsta')?.value.trim() || '';
   const online = document.getElementById('walletOnline')?.value.trim() || '';
-  const r = await EyeApi.adminSetSiteSetting('payment_wallets_json', JSON.stringify({ telda, instapay, online }));
+
+  const offers = {
+    'Telda': {
+      type: document.getElementById('teldaDiscType')?.value || 'none',
+      value: Number(document.getElementById('teldaDiscValue')?.value) || 0
+    },
+    'InstaPay': {
+      type: document.getElementById('instaDiscType')?.value || 'none',
+      value: Number(document.getElementById('instaDiscValue')?.value) || 0
+    },
+    'Online Wallet': {
+      type: document.getElementById('onlineDiscType')?.value || 'none',
+      value: Number(document.getElementById('onlineDiscValue')?.value) || 0
+    },
+    'COD': {
+      type: document.getElementById('codDiscType')?.value || 'none',
+      value: Number(document.getElementById('codDiscValue')?.value) || 0
+    }
+  };
+
+  const locks = {
+    'Telda': document.getElementById('teldaMaxLimit')?.value ? Number(document.getElementById('teldaMaxLimit').value) : 0,
+    'InstaPay': document.getElementById('instaMaxLimit')?.value ? Number(document.getElementById('instaMaxLimit').value) : 0,
+    'Online Wallet': document.getElementById('onlineMaxLimit')?.value ? Number(document.getElementById('onlineMaxLimit').value) : 0,
+    'COD': document.getElementById('codMaxLimit')?.value ? Number(document.getElementById('codMaxLimit').value) : 0
+  };
+
+  const r = await EyeApi.adminSetSiteSetting('payment_wallets_json', JSON.stringify({ telda, instapay, online, offers, locks }));
   if (!r.ok) showToast('Save failed');
   else {
-    showToast('Payment numbers saved');
-    EyeApi.writeLog('UPDATE_PAYMENT_WALLETS', 'site_settings', 'payment_wallets', 'Admin updated Telda/InstaPay wallet details');
+    showToast('Payment details & offers saved');
+    EyeApi.writeLog('UPDATE_PAYMENT_WALLETS', 'site_settings', 'payment_wallets', 'Admin updated payment details, discount offers and locks');
   }
 }
 
@@ -1835,8 +1917,27 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     document.getElementById('adminLogin').style.display = 'none';
     document.getElementById('adminWrap').style.display = 'flex';
-    initDashboard();
-    renderProductsTable();
+    
+    let activeTab = 'dashboard';
+    try {
+      activeTab = sessionStorage.getItem('admin_active_tab') || 'dashboard';
+    } catch (_) {}
+    
+    let tabEl = null;
+    document.querySelectorAll('.admin-nav-item').forEach((item) => {
+      const onclickAttr = item.getAttribute('onclick') || '';
+      if (onclickAttr.includes(`showPage('${activeTab}'`) || onclickAttr.includes(`showPage("${activeTab}"`)) {
+        tabEl = item;
+      }
+    });
+
+    if (tabEl) {
+      const parentSection = tabEl.closest('.admin-nav-section');
+      if (parentSection) parentSection.classList.remove('collapsed');
+      showPage(activeTab, tabEl);
+    } else {
+      showPage('dashboard', document.querySelector('.admin-nav-item'));
+    }
   } finally {
     initLoader();
   }

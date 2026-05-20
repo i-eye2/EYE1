@@ -48,33 +48,169 @@ function pdSyncShipDisplay() {
   }
 }
 
-function pdRenderSizeSpecs(size) {
-  const el = document.getElementById('pdSizeSpecs');
-  if (!el || !__pdProduct) return;
-  const sizes = Array.isArray(__pdProduct.sizes) ? __pdProduct.sizes : [];
-  const rows = sizes
-    .map((sz) => {
-      const specs = (__pdProduct.sizeSpecs && __pdProduct.sizeSpecs[sz]) || {};
-      const kgRaw = specs.weight_kg != null ? specs.weight_kg : specs.length_cm;
-      const kg = kgRaw != null ? String(kgRaw).trim() : '';
-      return `<tr>
-        <th>${escapeHtml(sz)}${sz === size ? ' (selected)' : ''}</th>
-        <td>${kg ? `${escapeHtml(kg)} kg` : '—'}</td>
-      </tr>`;
-    })
-    .join('');
-  if (!rows) {
-    el.innerHTML = '';
-    el.style.display = 'none';
-    return;
+function findBestMatchingSize(height, weight, product) {
+  const sizes = Array.isArray(product.sizes) ? product.sizes : [];
+  const specs = product.sizeSpecs || {};
+  
+  for (const sz of sizes) {
+    const sp = specs[sz];
+    if (!sp) continue;
+    
+    let matchH = true;
+    if (sp.min_height != null && height < sp.min_height) matchH = false;
+    if (sp.max_height != null && height > sp.max_height) matchH = false;
+    
+    let matchW = true;
+    if (sp.min_weight != null && weight < sp.min_weight) matchW = false;
+    if (sp.max_weight != null && weight > sp.max_weight) matchW = false;
+    
+    if (matchH && matchW) {
+      const st = stockForProductSize(product, sz);
+      const available = Number.isFinite(st) && st > 0;
+      return { size: sz, available };
+    }
   }
-  el.style.display = 'block';
-  el.innerHTML = `
-    <div class="pd-specs-title">Size details</div>
-    <table class="pd-specs-table">
-      <tr><th>Size</th><th>Weight</th></tr>
-      ${rows}
-    </table>`;
+  return null;
+}
+
+function findRecommendedProduct(height, weight, allProducts, currentProductId, currentCategoryId) {
+  const candidates = allProducts.filter(p => p.id !== currentProductId);
+  
+  candidates.sort((a, b) => {
+    const aSame = a.categoryId === currentCategoryId ? 1 : 0;
+    const bSame = b.categoryId === currentCategoryId ? 1 : 0;
+    return bSame - aSame;
+  });
+  
+  for (const p of candidates) {
+    const match = findBestMatchingSize(height, weight, p);
+    if (match && match.available) {
+      return { product: p, size: match.size };
+    }
+  }
+  return null;
+}
+
+function openSizeGuideModal() {
+  document.getElementById('sizeGuideOverlay')?.remove();
+  
+  const overlay = document.createElement('div');
+  overlay.id = 'sizeGuideOverlay';
+  overlay.className = 'modal-overlay-checkout open';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9000;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(8px);padding:20px;';
+  
+  overlay.innerHTML = `
+    <div class="checkout-modal" style="max-width:440px;width:100%;background:var(--gray-100);border:1px solid var(--gray-200);padding:32px;position:relative">
+      <h2 style="font-family:var(--font-serif);font-size:24px;margin-bottom:20px;color:var(--white)">Find My Size</h2>
+      <button type="button" id="closeSizeGuideX" style="position:absolute;top:20px;right:20px;background:none;border:none;color:var(--gray-500);font-size:20px;cursor:pointer">✕</button>
+      
+      <div id="guideInputForm">
+        <div class="form-row">
+          <label style="display:block;font-size:10px;letter-spacing:0.2em;text-transform:uppercase;color:var(--gray-500);margin-bottom:8px">Height (cm)</label>
+          <input type="number" id="guideHeight" placeholder="e.g. 175" class="form-input" style="width:100%;padding:12px;background:var(--black);border:1px solid var(--gray-200);color:var(--white)" required />
+        </div>
+        <div class="form-row" style="margin-top:16px">
+          <label style="display:block;font-size:10px;letter-spacing:0.2em;text-transform:uppercase;color:var(--gray-500);margin-bottom:8px">Weight (kg)</label>
+          <input type="number" id="guideWeight" placeholder="e.g. 75" class="form-input" style="width:100%;padding:12px;background:var(--black);border:1px solid var(--gray-200);color:var(--white)" required />
+        </div>
+        
+        <div style="margin-top:24px;display:flex;gap:12px">
+          <button type="button" class="btn btn-gold" id="btnCalculateGuide" style="flex:1">Calculate</button>
+          <button type="button" class="btn btn-outline" id="btnCancelGuide" style="flex:1">Cancel</button>
+        </div>
+      </div>
+      
+      <div id="guideResults" style="display:none;margin-top:16px;text-align:center">
+        <div id="guideResultsContent" style="font-size:14px;line-height:1.6;color:var(--white)"></div>
+        <div style="margin-top:24px;display:flex;gap:12px;justify-content:center">
+          <button type="button" class="btn btn-gold" id="btnGuideApply" style="display:none;width:100%">Select Size</button>
+          <button type="button" class="btn btn-outline" id="btnGuideClose" style="width:100%">Close</button>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  document.body.appendChild(overlay);
+  
+  const close = () => overlay.remove();
+  document.getElementById('closeSizeGuideX').onclick = close;
+  document.getElementById('btnCancelGuide').onclick = close;
+  document.getElementById('btnGuideClose').onclick = close;
+  
+  document.getElementById('btnCalculateGuide').onclick = () => {
+    const hInput = document.getElementById('guideHeight');
+    const wInput = document.getElementById('guideWeight');
+    const h = Number(hInput.value);
+    const w = Number(wInput.value);
+    
+    if (!h || h <= 0 || !w || w <= 0) {
+      alert('Please enter valid height and weight.');
+      return;
+    }
+    
+    const match = findBestMatchingSize(h, w, __pdProduct);
+    const formDiv = document.getElementById('guideInputForm');
+    const resultsDiv = document.getElementById('guideResults');
+    const contentDiv = document.getElementById('guideResultsContent');
+    const applyBtn = document.getElementById('btnGuideApply');
+    
+    formDiv.style.display = 'none';
+    resultsDiv.style.display = 'block';
+    
+    if (match && match.available) {
+      contentDiv.innerHTML = `
+        <div style="font-size:48px;color:var(--gold);font-family:var(--font-serif);margin-bottom:12px">${escapeHtml(match.size)}</div>
+        <p>Based on your details, size <strong>${escapeHtml(match.size)}</strong> fits you best and is currently in stock!</p>
+      `;
+      applyBtn.style.display = 'block';
+      applyBtn.onclick = () => {
+        const sizeButtons = document.querySelectorAll('.pd-sizes .pd-size');
+        let selectedBtn = null;
+        sizeButtons.forEach(btn => {
+          const btnText = btn.textContent.split(' ')[0];
+          if (btnText === match.size) {
+            selectedBtn = btn;
+          }
+        });
+        if (selectedBtn) {
+          selectedBtn.click();
+        }
+        close();
+      };
+    } else {
+      let matchedSizeName = match ? match.size : null;
+      let reason = matchedSizeName 
+        ? `Size <strong>${escapeHtml(matchedSizeName)}</strong> is out of stock.`
+        : `We couldn't find a matching size for this product.`;
+      
+      const rec = findRecommendedProduct(h, w, window.__pdAllProductsCache || [], __pdProduct.id, __pdProduct.categoryId);
+      
+      if (rec) {
+        const href = productPublicHref(rec.product);
+        contentDiv.innerHTML = `
+          <div style="font-size:18px;color:#e8a0a0;margin-bottom:12px">⚠️ Size Unavailable</div>
+          <p style="margin-bottom:16px">${reason}</p>
+          <div style="border-top:1px solid var(--gray-200);padding-top:16px;margin-top:16px">
+            <p style="font-size:12px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px">Recommended for you</p>
+            <div style="display:flex;align-items:center;gap:12px;background:var(--gray-50);padding:12px;border:1px solid var(--gray-200);text-align:left;cursor:pointer" onclick="location.href='${escapeHtml(href)}'">
+              <img src="${escapeHtml(rec.product.image)}" style="width:48px;height:60px;object-fit:cover" />
+              <div>
+                <div style="font-family:var(--font-serif);font-size:15px;color:var(--white)">${escapeHtml(rec.product.name)}</div>
+                <div style="font-size:12px;color:var(--gold)">Size ${escapeHtml(rec.size)} is available</div>
+              </div>
+            </div>
+          </div>
+        `;
+      } else {
+        contentDiv.innerHTML = `
+          <div style="font-size:18px;color:#e8a0a0;margin-bottom:12px">⚠️ Size Unavailable</div>
+          <p>${reason}</p>
+          <p style="font-size:12px;color:var(--gray-500);margin-top:12px">No alternative products with matching sizes in stock were found.</p>
+        `;
+      }
+      applyBtn.style.display = 'none';
+    }
+  };
 }
 
 function pdSyncBuyRow(selectedSize) {
@@ -92,7 +228,6 @@ function pdSyncBuyRow(selectedSize) {
     addBtn.disabled = out;
     addBtn.textContent = out ? 'Out of stock' : pu.addToCartLabel || 'Add to cart';
   }
-  pdRenderSizeSpecs(selectedSize);
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -115,6 +250,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     EyeApi.fetchShippingFreeThresholdEgp(),
     EyeApi.fetchProducts()
   ]);
+  window.__pdAllProductsCache = allProducts || [];
   __pdZonesCfg = zonesCfg || { zones: [], defaultShippingEgp: 150 };
   __pdShipFree = shipFree;
   const brandBadge = escapeHtml(hp?.brand?.productBadge || '');
@@ -173,7 +309,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           <button type="button" class="pd-arrow next" id="pdNext" aria-label="Next image">›</button>
           <div class="pd-dots" id="pdDots"></div>` : ''}
         </div>
-        <div class="pd-size-specs" id="pdSizeSpecs" style="display:none"></div>
+        ${imgs.length > 1 ? `<div class="pd-thumbs" id="pdThumbs"></div>` : ''}
       </div>
       <div class="pd-info">
         ${metaBadge}
@@ -188,6 +324,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         <p class="pd-desc">${escapeHtml(__pdProduct.description || '')}</p>
         <div class="pd-label">${escapeHtml(pu.selectSizeLabel || '')}</div>
         <div class="pd-sizes" id="pdSizes"></div>
+        <button type="button" class="pd-size-guide-btn" id="pdSizeGuideBtn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:2px"><path d="M2 12h20"></path><path d="M20 12v-3"></path><path d="M16 12v-5"></path><path d="M12 12v-3"></path><path d="M8 12v-5"></path><path d="M4 12v-3"></path></svg>
+          Find my size
+        </button>
         <p class="pd-availability pd-availability-in" id="pdAvail">Available</p>
         <div class="pd-actions">
           <button type="button" class="btn btn-primary" id="pdAddCart">${escapeHtml(pu.addToCartLabel || '')}</button>
@@ -251,6 +391,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   pdSyncBuyRow(__pdSelectedSize);
 
+  const guideBtn = document.getElementById('pdSizeGuideBtn');
+  if (guideBtn) {
+    guideBtn.onclick = () => openSizeGuideModal();
+  }
+
   document.getElementById('pdAddCart').onclick = () => {
     if (!__pdSelectedSize) {
       showToast('Please select a size');
@@ -271,10 +416,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     await Wishlist.toggle(__pdProduct.id);
     syncWlLabel();
   };
-
   if (imgs.length > 1) {
     const track = document.getElementById('pdTrack');
     const dots = document.getElementById('pdDots');
+    const thumbs = document.getElementById('pdThumbs');
     function goSlide(i) {
       const n = imgs.length;
       __pdIndex = ((i % n) + n) % n;
@@ -283,13 +428,28 @@ document.addEventListener('DOMContentLoaded', async () => {
       pdLoadSlideImage(__pdIndex + 1);
       pdLoadSlideImage(__pdIndex - 1);
       dots.querySelectorAll('.pd-dot').forEach((dot, j) => dot.classList.toggle('active', j === __pdIndex));
+      if (thumbs) {
+        thumbs.querySelectorAll('.pd-thumb-btn').forEach((thumb, j) => {
+          thumb.classList.toggle('active', j === __pdIndex);
+        });
+      }
     }
-    imgs.forEach((_, i) => {
+    imgs.forEach((src, i) => {
       const d = document.createElement('button');
       d.type = 'button';
       d.className = 'pd-dot' + (i === 0 ? ' active' : '');
       d.onclick = () => goSlide(i);
       dots.appendChild(d);
+
+      if (thumbs) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'pd-thumb-btn' + (i === 0 ? ' active' : '');
+        btn.setAttribute('aria-label', `Go to slide ${i + 1}`);
+        btn.innerHTML = `<img src="${escapeHtml(src)}" alt="" />`;
+        btn.onclick = () => goSlide(i);
+        thumbs.appendChild(btn);
+      }
     });
     document.getElementById('pdPrev').onclick = () => goSlide(__pdIndex - 1);
     document.getElementById('pdNext').onclick = () => goSlide(__pdIndex + 1);
